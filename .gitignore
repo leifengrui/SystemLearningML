@@ -1,0 +1,18 @@
+# IDE / 工具元数据，不入库
+.claude/
+.obsidian/
+.claudian/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 日志与临时
+*.log
+tmp/
