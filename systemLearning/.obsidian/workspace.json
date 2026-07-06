@@ -1,0 +1,278 @@
+{
+  "main": {
+    "id": "2652deb32fdb5ca8",
+    "type": "split",
+    "children": [
+      {
+        "id": "57b7b00dd5f4e39c",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "455e4be3d959a300",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "整体目录.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "整体目录"
+            }
+          },
+          {
+            "id": "896bc3369d69dffa",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "03-PyTorch与框架工程/PyTorch核心/state_dict与load_state_dict.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "state_dict与load_state_dict"
+            }
+          },
+          {
+            "id": "61bc695569313a6d",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "03-PyTorch与框架工程/PyTorch核心/state_dict与load_state_dict.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "state_dict与load_state_dict"
+            }
+          },
+          {
+            "id": "bde4b237a2fa7858",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "03-PyTorch与框架工程/PyTorch核心/forward与backward.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "forward与backward"
+            }
+          }
+        ],
+        "currentTab": 1
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "85c9e3ec6e72eb9a",
+    "type": "split",
+    "children": [
+      {
+        "id": "50691077d4c790c2",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "d2ef6ebaf416685a",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "70e6fdb92ffa4d46",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "482f73335eb22722",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "c6848341b6dab221",
+    "type": "split",
+    "children": [
+      {
+        "id": "53f5f104ee4c5d82",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "bc27e764eddda119",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "03-PyTorch与框架工程/PyTorch核心/state_dict与load_state_dict.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for state_dict与load_state_dict"
+            }
+          },
+          {
+            "id": "4582e7a877d2d976",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "03-PyTorch与框架工程/PyTorch核心/state_dict与load_state_dict.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from state_dict与load_state_dict"
+            }
+          },
+          {
+            "id": "4ddfbc5d5bc83a75",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "fff99c3a315cc591",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "6895aefcfa289d77",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "03-PyTorch与框架工程/PyTorch核心/state_dict与load_state_dict.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of state_dict与load_state_dict"
+            }
+          },
+          {
+            "id": "36f70542bd784119",
+            "type": "leaf",
+            "state": {
+              "type": "claudian-view",
+              "state": {},
+              "icon": "bot",
+              "title": "Claudian"
+            }
+          }
+        ],
+        "currentTab": 5
+      }
+    ],
+    "direction": "horizontal",
+    "width": 389.5
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false,
+      "realclaudian:Open Claudian": false
+    }
+  },
+  "active": "36f70542bd784119",
+  "lastOpenFiles": [
+    "QA.md",
+    "03-PyTorch与框架工程/PyTorch核心/optimizer state管理.md",
+    "Untitled.base",
+    "整体目录.md",
+    "03-PyTorch与框架工程/PyTorch核心/state_dict与load_state_dict.md",
+    "03-PyTorch与框架工程/PyTorch核心/forward与backward.md",
+    "01-ML深度学习基础/张量与自动微分/autograd机制.md",
+    "03-PyTorch与框架工程/PyTorch核心/nn.Module.md",
+    "01-ML深度学习基础/训练工程基础/loss scaling.md",
+    "2026-07-06.md",
+    "02-Transformer与LLM核心结构/MoE/负载均衡损失.md",
+    "02-Transformer与LLM核心结构/MoE/MoE路由.md",
+    "06-训推系统/Rollout系统/R3 rollout routing replay.md",
+    "02-Transformer与LLM核心结构/MoE/MoE.md",
+    "11-显存与内存系统/资源核算/FLOPs计算.md",
+    "02-Transformer与LLM核心结构/Transformer基础/FFN.md",
+    "08-推理系统/推理优化/R3 rollout routing replay.md",
+    "02-Transformer与LLM核心结构/推理关键机制/autoregressive decoding.md",
+    "02-Transformer与LLM核心结构/LLM结构/causal mask.md",
+    "02-Transformer与LLM核心结构/LLM结构/logits generation.md",
+    "02-Transformer与LLM核心结构/推理关键机制/采样策略.md",
+    "02-Transformer与LLM核心结构/推理关键机制/KV cache.md",
+    "08-推理系统/推理优化/PD分离.md",
+    "02-Transformer与LLM核心结构/LLM结构/tokenization.md",
+    "02-Transformer与LLM核心结构/LLM结构/decoder-only architecture.md",
+    "02-Transformer与LLM核心结构/MoE",
+    "11-显存与内存系统/资源核算/MFU与算术强度.md",
+    "11-显存与内存系统/资源核算",
+    "12-训练稳定性工程/数值稳定",
+    "12-训练稳定性工程/常见trick",
+    "12-训练稳定性工程",
+    "11-显存与内存系统/显存结构",
+    "11-显存与内存系统/优化技术",
+    "11-显存与内存系统",
+    "10-性能分析与优化/profiling工具"
+  ]
+}

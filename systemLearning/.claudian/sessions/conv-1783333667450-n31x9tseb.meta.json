@@ -1,0 +1,24 @@
+{
+  "id": "conv-1783333667450-n31x9tseb",
+  "providerId": "opencode",
+  "title": "你好问候",
+  "titleGenerationStatus": "success",
+  "createdAt": 1783333667450,
+  "updatedAt": 1783336684378,
+  "lastResponseAt": 1783333684560,
+  "sessionId": "ses_0c907bb07ffeHS60tFlzmAYMIw",
+  "providerState": {
+    "databasePath": "/Users/lei/.local/share/opencode/opencode.db"
+  },
+  "currentNote": "03-PyTorch与框架工程/PyTorch核心/optimizer state管理.md",
+  "usage": {
+    "cacheCreationInputTokens": 0,
+    "cacheReadInputTokens": 10752,
+    "contextTokens": 11137,
+    "contextWindow": 128000,
+    "contextWindowIsAuthoritative": true,
+    "inputTokens": 385,
+    "model": "opencode:alibaba-cn/glm-5.2",
+    "percentage": 9
+  }
+}
