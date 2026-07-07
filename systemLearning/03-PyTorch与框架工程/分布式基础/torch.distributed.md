@@ -6,10 +6,30 @@
 
 ## 1. 一句话定义
 
-**`torch.distributed`（简称 `dist`）** 是 PyTorch 的**分布式通信后端框架**——它提供跨进程（通常一进程一 GPU）的**集合通信（collective ops：all-reduce / all-gather / broadcast / reduce-scatter…）、进程组管理、点对点通信、屏障同步**等原语，是 [[DDP]]、[[FSDP]]、[[RPC]]、[[Ray与分布式调度]] 集成 PyTorch 训练的底层基石。所有"多卡"训练，最终都落到 `torch.distributed` 的通信调用上。
+**`torch.distributed`（简称 `dist`）** 是 PyTorch 的**分布式通信后端框架**——它提供跨进程（通常一进程一 GPU）的**集合通信（collective ops：[[all-reduce|all-reduce]] / [[AllGather|all-gather]] / [[broadcast]] / [[reduce-scatter]]…）、进程组管理、点对点通信、屏障同步**等原语，是 [[Distributed Data Parallel|DDP]]、[[Fully Sharded Data Parallel|FSDP]]、[[RPC]]、[[Ray与分布式调度]] 集成 PyTorch 训练的底层基石。所有"多卡"训练，最终都落到 `torch.distributed` 的通信调用上。
 
+> [!note] 解答：[[DDP]]、[[FSDP]]、[[RPC]]、[[Ray与分布式调度]]、集合通信原语 新建补全
+>
+> 已全部落盘，按归属放到对应章节，并在 `整体目录.md` 加双链。下面是落地清单与判据：
+>
+> | 条目 | 处理 | 落点 |
+> |---|---|---|
+> | **[[Distributed Data Parallel\|DDP]]** | 已有完整笔记 `Distributed Data Parallel.md`（192 行），加 YAML `aliases: [DDP]` 使 `[[DDP]]` 短名自动解析；不再重复建 stub | `03-PyTorch与框架工程/并行训练/`（§11） |
+> | **[[Fully Sharded Data Parallel\|FSDP]]** | 同上，已有完整笔记 232 行，加 `aliases: [FSDP]` | `03-PyTorch与框架工程/并行训练/`（§11） |
+> | **[[RPC]]** | **新建** `RPC.md`，按模板写全：`torch.distributed.rpc` 三大支柱（rpc_sync/async、RRef、分布式 autograd）、与 Ray/Pipelining/DTensor 对比、被替代原因、误区 | `03-PyTorch与框架工程/分布式基础/`（§10） |
+> | **[[Ray与分布式调度]]** | **新建** 章总览 `Ray与分布式调度.md`：三大原语、调度+object store+GCS、与 NCCL/PyTorch 集成、RLHF 拓扑、子笔记索引 | `09-Ray与分布式调度/`（§28） |
+> | **[[all-reduce\|all-reduce]] / [[AllGather\|all-gather]] / [[reduce-scatter]]** | 已有完整笔记，无需新建 | `07-分布式与并行计算/通信机制/`（§23） |
+> | **[[broadcast]]** | **新建** `broadcast.md`，与 all-reduce/AllGather/reduce-scatter 同风格：语义、ring/tree、与 AllGather/all-reduce 关系、DDP 启动对齐、误区 | `07-分布式与并行计算/通信机制/`（§23） |
+>
+> **关键决策**：DDP/FSDP 的全名笔记已是完整高质量内容，若再建同名 stub 会违反"宁可写长不要写空"+"不重复"。改用 Obsidian **aliases 前置 frontmatter**（`aliases: [DDP]`）让全库 30+ 处 `[[DDP]]` 短名链接自动解析到全名笔记，零重复、可点击。
+>
+> **本文件内的短名链接也改成 alias 形式**（`[[Distributed Data Parallel|DDP]]` / `[[Fully Sharded Data Parallel|FSDP]]`），点击即跳全名笔记。其他文件（forward/backward、optimizer state、nn.Module 等）的 `[[DDP]]`/`[[FSDP]]` 靠 aliases 已能解析，无需逐一改。
+>
+> **双向链接**：[[RPC]]、[[Ray与分布式调度]]、[[broadcast]] 的"与其他知识点的关系"小节已补 [[torch.distributed]] 反向链；本笔记 §6 也已列它们为下游。
+>
+> 相关：[[Distributed Data Parallel]]、[[Fully Sharded Data Parallel]]、[[RPC]]、[[Ray与分布式调度]]、[[all-reduce]]、[[AllGather]]、[[reduce-scatter]]、[[broadcast]]、[[整体目录]]。
 > [!note] 别和 `nn.DataParallel` 混
-> `nn.DataParallel`（[[Data Parallel]]）是单进程多线程、用 `torch.distributed` 不参与的旧方案，性能差已被弃用。现代多卡 = **多进程** + `torch.distributed` + `torchrun` 启动 → 即 [[DDP]]/[[FSDP]]。`torch.distributed` 是这条现代路线的地基。
+> `nn.DataParallel`（[[Data Parallel]]）是单进程多线程、用 `torch.distributed` 不参与的旧方案，性能差已被弃用。现代多卡 = **多进程** + `torch.distributed` + `torchrun` 启动 → 即 [[Distributed Data Parallel|DDP]]/[[Fully Sharded Data Parallel|FSDP]]。`torch.distributed` 是这条现代路线的地基。
 
 ## 2. 为什么需要它（动机与背景）
 
@@ -19,7 +39,7 @@
 2. **进程协调**：N 个进程要一起开始、一起保存、一起评估，需要屏障（barrier）和 rank 协商。
 3. **后端抽象**：GPU 间走 NCCL、CPU 间走 gloo、跨机走 MPI/gloo——上层算法不该关心底层传输细节。
 
-`torch.distributed` 提供这一切：统一的 collective API（`dist.all_reduce` 等不关心后端）、`init_process_group` 初始化、`ProcessGroup` 抽象、点对点 send/recv。它把"多卡通信"从算法里解耦出来，使 [[DDP]] 只需调 `all_reduce`、[[FSDP]] 只需调 `all_gather`/`reduce_scatter` 即可表达算法。
+`torch.distributed` 提供这一切：统一的 collective API（`dist.all_reduce` 等不关心后端）、`init_process_group` 初始化、`ProcessGroup` 抽象、点对点 send/recv。它把"多卡通信"从算法里解耦出来，使 [[Distributed Data Parallel|DDP]] 只需调 `all_reduce`、[[Fully Sharded Data Parallel|FSDP]] 只需调 `all_gather`/`reduce_scatter` 即可表达算法。
 
 ## 3. 核心概念详解
 
@@ -52,6 +72,42 @@ torch.cuda.set_device(local_rank)
 | **ucc** | 异构 | UCC | 新实验性，统一通信 |
 
 GPU 训练几乎总是 `nccl`——它针对 NV 拓扑（NVLink/PCIe/NVSwitch）做了高度优化，是 GPU all-reduce 事实标准，见 [[NCCL backend]]。
+
+> [!note] 解答：Huawei HCCL 与 NCCL 的区别和联系
+>
+> **一句话定位**：**HCCL（Huawei Collective Communication Library）是华为为昇腾 NPU（Ascend）打造的高性能集合通信库，在 CANN 软件栈里扮演的角色 = NCCL 在 CUDA 生态里的角色**。两者是跨厂商的"同位体"：同一类原语、同一类职责、同一套 α-β 性能模型，但绑定的硬件、互联、调用 API、生态都不同，且**互不兼容**——NCCL 调用跑不到 Ascend 上，反之亦然（来源：arXiv:2504.19519 "HCCL on Ascend NPUs is analogous to NCCL on NVIDIA GPUs"；UniOrch techrxiv "NVIDIA's NCCL and Huawei's HCCL are incompatible"）。
+>
+> **核心差异对比**
+>
+> | 维度 | NCCL | HCCL |
+> |---|---|---|
+> | 厂商 / 硬件 | NVIDIA GPU | 华为 Ascend NPU |
+> | 所属软件栈 | CUDA（+ cuDNN / PTX） | CANN（+ AscendCL / MindSpore） |
+> | 互联硬件 | NVLink / NVSwitch、PCIe、InfiniBand | HCCS（片间光互联）、RoH/RoCE（机间）、PCIe |
+> | 通信域分层 | 节点内 / 节点间（隐式） | **显式三层**：L0 机内 / L1 机间 / L2 超节点间 |
+> | 拓扑算法 | Ring、Tree、Mesh 等（内部自选） | 机内：Mesh / Ring / Double-Ring / Star；机间：Ring / RHD / NHR / NB / AHC / Pipeline / PairWise，按拓扑+数据量自适应 |
+> | 容错机制 | 主要靠框架层 checkpoint 回滚重训 | **通信算子级重执行**（环境变量 `HCCL_OP_RETRY_ENABLE="L0:0, L1:1, L2:1"`）：光模块抖动 / 断链时在通信域内重试算子，成功率约 95%，配合 `HCCL_OP_RETRY_PARAMS` 调最大次数 / 等待时间，**避免回滚 checkpoint** |
+> | 开源情况 | GitHub `nvidia/nccl` 全开源 | Gitee `ascend/cann-hccl` **部分开源**（通信框架 + 通信算法），平台层闭源 |
+> | 调用 API | `ncclAllReduce(...)` 等 C API | `HcclAllReduce(...)` 等 AscendCL 风格 C API |
+> | 生态成熟度 | 极成熟，几乎所有分布式训练框架默认后端 | 围绕 Ascend/CANN/MindSpore 构建，随国产替代快速扩张 |
+> | 性能模型 | α-β（Hockney） | 同样 α-β：$D=\alpha+n\beta+n\gamma$ |
+>
+> **关键相同点**
+> - 都是"多卡分布式训练里梯度 / 参数同步的通信库"，提供 AllReduce / AllGather / ReduceScatter / All-to-All / Broadcast 等同一批 collective 原语。
+> - 都封装底层互联细节、自动按拓扑选算法、为上层框架（PyTorch / MindSpore）提供后端。
+> - 都用 α-β 延迟-带宽模型做算法选优。
+>
+> **在 `torch.distributed` 里的联系**：PyTorch 原生后端表只有 `nccl / gloo / mpi / ucc`，没有 `hccl`。要在 Ascend 上跑 PyTorch 分布式，走的是 **Ascend 版 PyTorch（`torch_npu`）适配**——它把 `torch.distributed` 的 `ProcessGroup` 后端扩展出一个 `hccl` 后端，让 `dist.init_process_group(backend="hccl")` 与 `dist.all_reduce(...)` 直接落到 HCCL 上。即上层 API 不变、底层把 NCCL 换成 HCCL，是"同接口、不同实现"的适配关系，而不是 HCCL 调用 NCCL。
+>
+> **常见误区**
+> - ❌ "HCCL 是 NCCL 的 fork / 国产移植" → 不是。两者独立实现，HCCL 针对 Ascend 的 HCCS/RoH 拓扑与 Cube/AI Core 矩阵算子做了定制，算法集（NHR/NB/AHC/Pipeline）也与 NCCL 不完全重合。
+> - ❌ "代码里 `import nccl` 换成 `import hccl` 就能跨平台" → 不能。API 签名、句柄类型、内存语义都不同；混合集群（如 NVIDIA GPU + Ascend NPU）需要上层做通信后端抽象与路由（参考 UniOrch）。
+> - ❌ "HCCL 只是华为内部闭源黑盒" → 通信框架与算法层已开源在 `gitee.com/ascend/cann-hccl`，可定制、可重编、有 LLT 与 HCCL Test 工具链。
+> - ❌ "NCCL 更成熟所以一定更快" → 不一定。在 Ascend 硬件上 NCCL 根本跑不了；性能比较必须在各自原生硬件上做，且与拓扑、batch、算子融合强相关。
+>
+> **延伸**：DeepSeek-V4 适配 Ascend 950 集群时，关键工程之一就是把"原本基于 NCCL 的分布式通信"整体迁到 HCCL，这也是"CUDA exit"难在哪里的具体体现——通信库切换不是改个 import，而是要重做拓扑感知、容错、性能调优。详见 [[NCCL backend]]、[[CANN栈]]、[[Ascend NPU]]。
+>
+> 来源：华为云 HCCL 文档 / CANN HCCL 用户指南 / Gitee cann-hccl README / arXiv:2504.19519 / UniOrch (techrxiv) / Intelligent Living CANN vs CUDA。
 
 ### 3.3 集合通信原语一览
 
@@ -144,7 +200,7 @@ if __name__ == "__main__":
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: [[NCCL backend]]（实际传输库）、[[process group]]（通信的"频道"）、[[rank与world size]]（身份与规模）。
-- **下游（应用）**: [[DDP]]（梯度 all-reduce）、[[FSDP]]（参数/梯度/优化器状态分片，靠 all-gather/reduce-scatter）、[[Pipeline Parallel]]（点对点 send/recv）、[[torchrun]]（启动器）、[[Ray与分布式调度]]（Ray 调 PyTorch actor 时也用 dist 通信）、[[weight sync mechanism]]（训推分离的权重广播靠 broadcast）。
+- **下游（应用）**: [[Distributed Data Parallel|DDP]]（梯度 all-reduce）、[[Fully Sharded Data Parallel|FSDP]]（参数/梯度/优化器状态分片，靠 all-gather/reduce-scatter）、[[Pipeline Parallel]]（点对点 send/recv，旧实现用 [[RPC]]）、[[torchrun]]（启动器）、[[Ray与分布式调度]]（Ray 调 PyTorch actor 时也用 dist 通信）、[[weight sync mechanism]]（训推分离的权重广播靠 [[broadcast]]）。
 - **对比 / 易混**:
   - `torch.distributed` vs `nn.DataParallel`：前者多进程、后者单进程多线程（弃用）。
   - `dist` vs Ray：dist 是 GPU 集合通信原语，Ray 是通用分布式调度框架（任务/actor），二者正交，常组合（Ray 调起多个 dist 进程组）。
@@ -185,4 +241,4 @@ if __name__ == "__main__":
 `export NCCL_DEBUG=INFO` 打印 NCCL 拓扑探测、ring 建立、P2P 支持情况；`NCCL_DEBUG_SUBSYS=ALL` 更细。排查"卡死"和"慢"的第一手段，见 [[NCCL backend]] §8。
 
 ---
-相关: [[分布式基础]]、[[NCCL backend]]、[[process group]]、[[rank与world size]]、[[DDP]]、[[FSDP]]、[[torchrun]]
+相关: [[分布式基础]]、[[NCCL backend]]、[[process group]]、[[rank与world size]]、[[Distributed Data Parallel|DDP]]、[[Fully Sharded Data Parallel|FSDP]]、[[RPC]]、[[torchrun]]、[[broadcast]]、[[Ray与分布式调度]]

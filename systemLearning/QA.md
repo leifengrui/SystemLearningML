@@ -129,7 +129,6 @@
 ## 三、PyTorch / 深度学习框架工程 / PyTorch核心
 
 ### [[state_dict与load_state_dict]]
-
 - [[state_dict与load_state_dict]] — state_dict 是"存权重本身"吗？safetensors 存的是它吗？（是，但含 Buffer；加载验证看返回值 + 逐键 `torch.equal`；safetensors 即 state_dict 的安全格式）
 - [[state_dict与load_state_dict]] — Buffer 是什么？（`register_buffer` 注册的不学但要搬的张量；BN running / RoPE inv_freq；对比 Parameter）
 - [[state_dict与load_state_dict]] — LR 调度是什么？（按 step/epoch 改 lr 的策略；warmup+cosine 标配；续训要存 `scheduler.state_dict()`）
@@ -146,8 +145,27 @@
 ### [[optimizer state管理]]
 
 - [[optimizer state管理]] — 什么是优化器？到底在优化什么？（把梯度变成参数更新的算法；优化参数 $\theta$ 使 $\mathcal{L}$ 最小；$\theta^*=\arg\min\mathcal{L}(\theta)$；三类对象分工表）
+- [[optimizer state管理]] — 白话说一下优化器起什么作用 还没看懂（蒙眼下山比喻：梯度=探哪边下坡、优化器=迈那一脚；不定义目标不产梯度只翻译成参数更新；Momentum 抹噪声、Adam 自适应步长；状态=优化器记的小本本）
+- [[optimizer state管理]] — 这里是不是格式写错了？（是；AdamW 多行公式块原用单 `$` 定界，跨行 `aligned` 不渲染，已改为 `$$...$$`；附行内 vs 独立公式块定界符规则表）
 
 > 本章另落盘笔记（无批注）：[[nn.Module]]、[[hooks机制]]、[[torch.distributed]]、[[process group]]、[[rank与world size]]、[[NCCL backend]]、[[Data Parallel]]、[[Distributed Data Parallel]]、[[Fully Sharded Data Parallel]]。
+
+## 三、PyTorch / 深度学习框架工程 / 分布式基础
+
+### [[torch.distributed]]
+
+- [[RPC]] — [[DDP]]/[[FSDP]]/[[RPC]]/[[Ray与分布式调度]]/集合通信原语 新建补全（**新建型**：DDP/FSDP 已有全名笔记，加 `aliases` frontmatter 让短名解析；新建 [[RPC]]（§10）、[[broadcast]]（§23 通信机制）、[[Ray与分布式调度]] 章总览（§28）；整体目录已加双链）
+- [[torch.distributed]] — huawei hccl 有什么区别和联系？（**行内型**：HCCL 是华为 Ascend NPU 对标 NCCL 的集合通信库，CANN 栈里同位体；硬件/互联/算法/容错/开源/生态对比表；`torch_npu` 把 hccl 适配为 `torch.distributed` 后端，同接口不同实现；互不兼容、不能直接换 import）
+
+### [[NCCL backend]]
+
+- [[NCCL backend]] — gloo 是什么？第一次听说 CPU 训练（**行内型**：gloo=Meta 开源 CPU 集合通信库，`torch.distributed` 的 `backend="gloo"`；与 NCCL 并列、按张量设备二选一；CPU 训练真实场景=小模型/调试/无GPU集群/DDP逻辑单元测试；gloo vs NCCL 对比表+代码+误区"GPU 张量→nccl，CPU 张量→gloo"）
+
+### [[rank与world size]]
+
+- [[rank与world size]] — master rank/rank 0 有什么特殊？为什么要知道谁是 0？（**行内型**：rank 0 计算上平等，只在 IO/协调上被约定挑出来当"管事的"；必须知道谁是 0 才能写 `if rank==0` 守卫和 `broadcast(src=0)`；master 是社区约定非框架强制）
+- [[rank与world size]] — 为什么叫 nnode/nnodes？（**行内型**：`nnodes`=number of nodes="节点数=机器数"；`n` 前缀=数量约定，node=一台机器；附三个 n 的关系表与误区）
+- [[rank与world size]] — §8.3 两种绑卡流派是什么意思？（**行内型**：A 流派 `CUDA_VISIBLE_DEVICES` 隔离可见性每进程只见一卡 local_rank 恒 0；B 流派 torchrun 全可见+`set_device(local_rank)` 绑定，主流；对比表+为什么选 B+误区）
 
 ---
 

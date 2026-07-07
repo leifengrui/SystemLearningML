@@ -11,6 +11,72 @@
 > [!note] NCCL 的地位
 > 几乎所有 NV GPU 多卡训练都走 NCCL：PyTorch `nccl` 后端、Megatron-LM、DeepSpeed、vLLM 推理的多卡 all-reduce，底层都是 NCCL。非 NV 平台（AMD ROCm）用对应库 RCCL；Intel GPU 用 oneCCL。CPU 训练用 gloo。
 
+> [!note] 解答：gloo 是什么？为什么会有 CPU 训练？
+> 
+> **gloo** 是 Facebook（Meta）开源的一个**进程间集合通信库**（[github.com/facebookincubator/gloo](https://github.com/facebookincubator/gloo)），用 C++ 写、提供 Python 绑定，能在**纯 CPU 环境**（机器有若干 CPU 核心、可能跨机走 TCP）上做 all-reduce / all-gather / broadcast 等集合通信原语。PyTorch 把它集成成 `torch.distributed` 的一个后端：`dist.init_process_group(backend="gloo")`。它和 [[NCCL backend|NCCL]] 是**并列的两个后端**——NCCL 管 GPU 集合通信，gloo 管 CPU 集合通信（也能传 GPU 张量但慢，不推荐）。
+> 
+> ### 为什么"第一次听说 CPU 训练"很正常
+> 
+> 因为 **LLM / 深度学习时代默认全是 GPU 训练**，CPU 训练只出现在一些边缘场景，所以教程里很少提 gloo。CPU 训练的真实场景：
+> 
+> 1. **CPU 推理 / 小模型调试**：几百万参数的 MLP、传统 ML 模型、CPU 上跑得通的 GNN/推荐小塔，不需要 GPU；
+> 2. **模型太小 GPU 不划算**：比如 embedding 训练的前期原型、轻量 finetune，CPU 多机反而比单 GPU 便宜；
+> 3. **没有 GPU 的集群**：纯 CPU 服务器做参数服务器（PS）式训练、强化学习里的非神经部分（如环境 rollout 的部分计算）；
+> 4. **CPU 上做分布式逻辑的单元测试**：写 DDP 代码时不想占 GPU，用 gloo 在 CPU 上验证流程对不对（数据切分、rank 同步、checkpoint），跑通了再换 nccl 上 GPU。这是工程里 gloo 最常见的用法——**"CPU 上调分布式逻辑，GPU 上调性能"**。
+> 
+> 所以 gloo 不是"落后"，而是**给没有 GPU 或不想用 GPU 的场景兜底**。
+> 
+> ### gloo vs NCCL 对比
+> 
+> | 维度 | **gloo** | **NCCL** |
+> |---|---|---|
+> | 厂商 | Meta 开源 | NVIDIA |
+> | 加速硬件 | **CPU**（多核 + TCP/共享内存） | **GPU**（NVLink / NVSwitch / PCIe / IB+RDMA） |
+> | 张量位置 | CPU 张量（`tensor.cpu()`） | GPU 张量（`tensor.cuda()`） |
+> | 通信路径 | TCP socket / POSIX 共享内存 | NVLink / GPUDirect RDMA |
+> | 带宽量级 | 数 GB/s（受网卡/内存带宽限制） | 数百 GB/s（NVLink） |
+> | 是否 GPU kernel | 否（CPU 线程算 reduce） | 是（CUDA kernel，可与计算 overlap） |
+> | 典型用途 | CPU 训练、分布式逻辑单元测试、CPU 推理编排 | 一切 GPU 多卡训练（DDP/FSDP/TP） |
+> | 跨机 | TCP（慢） | IB+RDMA（接近线速） |
+> 
+> 同样是 all-reduce 梯度：NCCL 在 8 卡 NVLink 机器上几 GB 梯度只要几百微秒；gloo 走 TCP 跨机要慢一两个量级。所以**有 GPU 就用 nccl，没 GPU 才用 gloo**，这是铁律。
+> 
+> ### 代码：gloo 后端长什么样
+> 
+> ```python
+> import torch
+> import torch.distributed as dist
+> import os
+> 
+> # torchrun --nproc_per_node=4 demo_gloo.py
+> dist.init_process_group(backend="gloo")   # 注意这里是 gloo，不是 nccl
+> rank = dist.get_rank()
+> 
+> # 注意：CPU 张量！不调 .cuda()
+> t = torch.ones(8) * rank                   # 各 rank 不同值
+> dist.all_reduce(t, op=dist.ReduceOp.SUM)   # 各 rank 求和
+> print(f"[rank {rank}] result={t.tolist()}")  # 应为 [6,6,...,6] (0+1+2+3)
+> dist.barrier()
+> ```
+> 
+> 把 `gloo` 改成 `nccl`、把 `torch.ones(8)` 改成 `torch.ones(8).cuda()`，就是 GPU 版。**backend 必须和张量所在设备匹配**——gloo 后端传 GPU 张量会报错或极慢，nccl 后端传 CPU 张量直接报错。
+> 
+> ### 一个常被忽略的点：gloo 的 GPU 支持
+> 
+> gloo 其实也能传 GPU 张量（旧版曾支持），但 reduce 计算仍走 CPU（要把数据拷到 CPU 算再拷回 GPU），比 NCCL 慢得多，**没有任何理由在 GPU 场景用 gloo**。所以记住：**GPU 张量 → nccl；CPU 张量 → gloo**，一一对应，不要混。
+> 
+> ### 误区清单
+> 
+> 1. **"gloo 是 NCCL 的替代"** → 不是平替。gloo 是 CPU 后端，NCCL 是 GPU 后端，**按设备选**。
+> 2. **CPU 训练 = 落后** → 取决于模型规模。小模型 / 调试 / 无 GPU 集群，CPU+gloo 是合理选择；LLM 这种百亿参数级别 CPU 根本跑不动，与 gloo 无关，是算力问题。
+> 3. **在 GPU 机器上还用 gloo** → 错误配置，慢且不发挥 NVLink；GPU 机器一律 `nccl`。
+> 4. **写 DDP 时忘了 backend** → 默认在 GPU 机器 PyTorch 会提示用 nccl；若你显式传 `gloo` 又放 GPU 张量，会踩坑。`init_process_group(backend="nccl")` 是 GPU 训练标配。
+> 5. **以为 gloo 不能跨机** → 能，走 TCP；只是带宽小、延迟高，不适合大模型梯度同步。
+> 
+> ### 关联
+> - gloo 是 [[torch.distributed]] 的后端之一，与 [[NCCL backend]] 并列；选哪个看张量在 CPU 还是 GPU。
+> - [[DDP]]/[[FSDP]] 在 GPU 训练时强制用 nccl；若你硬要用 gloo 跑 DDP（CPU 模型 / 单元测试），可以，但别指望性能。
+> - 强化学习系统里 rollout 环境（非神经网络部分）有时用 gloo 做 CPU 侧编排，神经网络部分仍用 nccl，见 [[Ray与分布式调度]] 的多 actor 集成。
 ## 2. 为什么需要它（动机与背景）
 
 GPU 多卡训练需要频繁 all-reduce 梯度（每 step 一次，百亿参数模型梯度几十 GB）。朴素实现（rank 0 收集所有再广播）在 8 卡上要传 $(N-1)M\approx 7M$ 且 rank 0 是瓶颈，不可扩展。
@@ -22,7 +88,7 @@ NCCL 的核心价值：
 3. **GPUDirect RDMA**：跨机 GPU 直接到 IB 网卡，不绕 CPU 内存，跨机 all-reduce 接近线速；
 4. **CUDA kernel 融合**：通信本身是 GPU kernel，可与计算 stream 异步 overlap；
 5. **算子丰富**：all-reduce/all-gather/reduce-scatter/broadcast/all-to-all 全套，且支持 async。
-
+【user】这几点可以展开讲一讲 甚至新建文件
 没有 NCCL，多卡 LLM 训练要么慢一个量级，要么跨机根本跑不动。
 
 ## 3. 核心概念详解

@@ -1,3 +1,7 @@
+---
+aliases: [FSDP]
+---
+
 # Fully Sharded Data Parallel
 
 > **所属章节**: [[并行训练]]

@@ -1,3 +1,7 @@
+---
+aliases: [DDP]
+---
+
 # Distributed Data Parallel
 
 > **所属章节**: [[并行训练]]
