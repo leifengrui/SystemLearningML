@@ -34,6 +34,32 @@ $$
 ### 3.2 为什么是 $\log\pi$ 而不是 $\pi$
 
 求导 $\nabla P(\tau\mid\theta)=P(\tau\mid\theta)\nabla\log P(\tau\mid\theta)$（对数恒等式 / score function trick）。$P(\tau\mid\theta)=\rho_0\prod_t\pi_\theta(a_t\mid s_t)P(s_{t+1}\mid s_t,a_t)$，取 $\log$ 后 $\prod$ 变 $\sum$，而 $\log P(s_{t+1}\mid s_t,a_t)$ 不含 $\theta$ 求导为 0，只剩 $\sum_t\nabla\log\pi_\theta(a_t\mid s_t)$。这就是 $\log\pi$ 的来源——它是把"乘积分布"求导变成"可加导数"的数学技巧。
+> [!note] 解答：为什么策略梯度用 $\log\pi$ 而不是直接用 $\pi$——五大好处
+> 批注问的是 §3.2 取对数的好处。直接对轨迹概率 $P(\tau\mid\theta)=\rho_0\prod_t\pi_\theta(a_t\mid s_t)P(s_{t+1}\mid s_t,a_t)$ 求导理论上也行，但取 $\log$ 后求导有五大工程与数学收益：
+> 
+> **好处 1：连乘变连加，求导项数从爆炸变线性。** $P(\tau\mid\theta)$ 是 $T$ 个因子的连乘，直接对 $\theta$ 求导要用乘积法则，产生 $O(2^T)$ 级别的交叉项。取 $\log$ 后 $\log P(\tau\mid\theta)=\log\rho_0+\sum_t[\log\pi_\theta(a_t\mid s_t)+\log P(s_{t+1}\mid s_t,a_t)]$，连乘变连加，求导只剩 $\sum_t\nabla\log\pi_\theta$，项数线性 $O(T)$，可算。
+> 
+> **好处 2：干净分离策略与环境 → model-free 的数学根基。** $\log P$ 拆成"策略项 $\sum\log\pi$"+"环境项 $\sum\log P$"+"初始 $\log\rho_0$"。对 $\theta$ 求导时后两项不含 $\theta$ 直接消失，只剩 $\sum_t\nabla\log\pi_\theta$。这就是 REINFORCE 不需要知道环境模型 $P$ 也能算梯度的根因——直接对 $P(\tau\mid\theta)$ 求导无法这么干净地分离 $P$，model-free 站不住。
+> 
+> **好处 3：数值防下溢，长序列必须。** 长轨迹下 $\prod_t\pi_\theta(a_t\mid s_t)$ 是很多小概率连乘，浮点下很快下溢到 0（尤其 fp16/bf16）。取 $\log$ 后变 $\sum_t\log\pi$，是负数累加（量级 $O(T)$），不下溢。LLM-RL 序列上千 token，不用 $\log$ 直接算 $\prod$ 会得到 0 梯度，根本训不动。
+> 
+> **好处 4：梯度量级归一化，训练稳。** $\nabla\log\pi_\theta=\nabla\pi_\theta/\pi_\theta$，分母 $\pi$ 把"小概率动作梯度极小、大概率动作梯度大"的不均衡归一化掉，所有动作的 score 量级一致。直接用 $\nabla\pi$ 会让小概率动作几乎学不到（梯度被 $\pi$ 压没），训练偏向大概率动作。
+> 
+> **好处 5：与监督学习交叉熵同构，工程可复用。** $\nabla\log\pi_\theta(a_t\mid s_t)$ 正是"让动作 $a_t$ 概率增大"的方向，与 SFT 的交叉熵梯度 $\nabla\log p(y_t\mid x,y_{<t})$ 同形。RLHF 把 LLM 当 $\pi_\theta$ 直接套策略梯度，框架代码可复用，只是权重从 1 换成 $G_t$/$\hat A_t$（见 [[Actor-Critic]] §3.2）。若用 $\nabla\pi$ 而非 $\nabla\log\pi$，与 SFT loss 不同构，复用困难。
+> 
+> **对比小结**：
+> 
+> | 维度 | 直接用 $\pi$ / $\nabla\pi$ | 用 $\log\pi$ / $\nabla\log\pi$ |
+> |---|---|---|
+> | 求导项数 | 乘积法则 $O(2^T)$ 爆炸 | 连加 $O(T)$ 线性 |
+> | 环境分离 | 难，$P$ 混在乘积里 | 干净，$\log P$ 求导为 0 |
+> | 数值稳定 | 长序列下溢 0 | 负数累加不下溢 |
+> | 梯度量级 | 随 $\pi$ 大小变 | $\nabla\pi/\pi$ 归一化 |
+> | 与 SFT 同构 | 否 | 是（交叉熵同形） |
+> 
+> **误区**：取 $\log$ 不是"让 $\pi$ 变大"的技巧，而是把"对乘积分布求导"转成"对可加对数求导"的数学等价变换（$\nabla P=P\nabla\log P$ 是恒等式，不改变数学，只改变可计算性）。$\log\pi$ 也不改变策略——$\pi$ 与 $\log\pi$ 单调对应，最大化 $\mathbb{E}[G]$ 的 $\theta^*$ 不变；变的只是梯度的**形式**与**数值可行性**。
+> 
+> 详见本篇 §4.1 策略梯度定理推导、[[policy与value function]] §4.1、[[Actor-Critic]] §4.2 advantage 形式、[[baseline]] §4.1 无偏性证明（都用 $\nabla\log\pi$ 这一套）。
 
 ### 3.3 直觉：增大好轨迹的动作概率
 

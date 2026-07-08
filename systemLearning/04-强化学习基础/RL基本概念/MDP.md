@@ -7,7 +7,8 @@
 ## 1. 一句话定义
 
 **MDP（Markov Decision Process，马尔可夫决策过程）** 是强化学习的**标准数学外壳**：用五元组 $(\mathcal{S},\mathcal{A},P,R,\gamma)$ 描述"智能体在环境里**按马尔可夫性**一步步决策"的过程——状态集 $\mathcal{S}$、动作集 $\mathcal{A}$、转移概率 $P(s'\mid s,a)$、奖励函数 $R(s,a)$（或 $R(s,a,s')$）、折扣因子 $\gamma\in[0,1)$。几乎所有 RL 算法（[[REINFORCE]]、[[Actor-Critic]]、[[PPO clipped objective]]、RLHF）都在 MDP 框架下定义和推导。
-
+> [!note] 已展开为独立笔记
+> "什么是 [[Actor-Critic]]" 已新建为专篇 [[Actor-Critic]]，归 [[04-强化学习基础]]/14. Actor-Critic 小节。要点速览：Actor-Critic = 策略梯度方法的两网络联合学习架构——actor（策略网络 $\pi_\theta$）决策、critic（价值网络 $V_\phi$）评估，critic 给 actor 提供低方差的 advantage 权重 $\hat A_t$（$G_t-V_\phi$ / TD 误差 / GAE），把 [[REINFORCE]] 的"用实际 return 当权重、无偏高方差"升级为"用 critic 估的 $V$ 减底色、有偏低方差、可在线"。它是 [[A2C]]/[[A3C]]/[[PPO clipped objective]]/RLHF-PPO 的统一骨架。完整推导（策略梯度定理 → advantage 形式 → 双时间尺度收敛 → GAE 标配）、可跑代码、与 REINFORCE/DQN/DDPG/SAC 对比、LLM-RL 映射表，见 [[Actor-Critic]]。
 > [!note] 马尔可夫性是什么
 > "未来只依赖当前状态，与历史无关"：$P(s_{t+1}\mid s_t,a_t,s_{t-1},a_{t-1},\dots)=P(s_{t+1}\mid s_t,a_t)$。它是 MDP 的"无记忆"前提——只要当前状态 $s_t$ 把所有历史信息压缩进去了，下一步转移就只看 $s_t,a_t$。如果环境有隐藏状态（如部分可观测 POMDP），马尔可夫性不成立，需要 belief state 或 RNN 编码历史（这正是 LLM 做 RL 时 prompt 上下文的作用）。
 
