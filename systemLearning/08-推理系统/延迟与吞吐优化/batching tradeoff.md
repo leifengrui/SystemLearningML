@@ -15,6 +15,35 @@
 > - **为什么**：GPU 是并行处理器，batch 小则算力闲置；batch 大则凑批等、KV 读量大。
 > - **怎么做**：在 SLO（如 P99 延迟 < X）约束下找最大吞吐的 batch；用 [[continuous batching]] + chunked prefill 动态调节。
 
+> [!note] 解答：perf / throughput 到底是什么指标，细说
+> 这里把推理服务里常挂在嘴边的"性能指标"一次讲透。分三类：
+>
+> **1. 吞吐类指标（throughput，"单位时间产出多少"）——成本视角**
+> - **QPS（Queries Per Second，请求/秒）**：每秒完成多少个**请求**。请求粒度，关心"一秒能伺候多少用户"。
+> - **TPS（Tokens Per Second，token/秒）**：每秒产出多少个 **token**。生成粒度，比 QPS 更本质——长回答 1 个请求也能跑很久。`TPS_tok = batch_size / step_time`（每步 decode 产 batch 个 token）。
+> - **goodput（有效吞吐）**：**满足 SLO 的请求速率**。裸 throughput 里超 SLO（如 P99 延迟超标）的不算。优化目标是 goodput 不是裸 throughput（见 §3.4）。
+> - 单位换算：`1 req/s` 若每 req 平均 500 token → `500 tok/s`。
+>
+> **2. 延迟类指标（latency，"一个请求要等多久"）——体验视角**
+> - **TTFT（Time To First Token，首 token 延迟）**：从请求到达到吐出第一个 token 的时间。影响"首响感"，主要被 prefill 计算 + 排队凑批决定。
+> - **TPOT（Time Per Output Token，每 token 延迟）**：decode 阶段每多吐一个 token 的平均间隔。影响"流式跟手度"，主要被 decode step_time 决定。
+> - **E2E Latency（端到端）**：`E2E = TTFT + (n-1) × TPOT`，n 是生成 token 数。
+> - **P50/P99/P999**：分位数延迟。P99 是"99% 的请求低于这个值"，服务 SLO 通常卡 P99（尾部体验）而非均值。
+>
+> **3. 利用率类指标（utilization，"硬件有没有被吃满"）——资源视角**
+> - **GPU utilization（SM 占用率 / 算力利用率）**：GPU 计算单元有多少时间在干活。batch 小 → 利用率低（算力闲置）；batch 大 → 接近满载。
+> - **Memory bandwidth utilization（显存带宽利用率）**：decode 是 memory-bound，关键看带宽吃满没。这是 decode 阶段大 batch 能提吞吐的根因——同一次 KV cache 读取服务更多 token。
+> - **KV cache 占用 / 显存预算**：`M_KV = 2·n_layers·d·seq·batch·bytes`（见 §3.2），是 batch 的硬上限。
+>
+> **三者怎么串起来（本笔记的主线）**：
+> ```
+> batch ↑  →  GPU 利用率 ↑  →  throughput(QPS/TPS) ↑  （吞吐涨）
+> batch ↑  →  凑批等 + KV 读量 ↑  →  TTFT/TPOT ↑  （延迟涨）
+> batch ↑  →  KV cache 显存 ↑  →  可能 OOM  （硬约束）
+> ```
+> batching tradeoff 就是：在**延迟 SLO（P99）** 和**显存预算**双重约束下，找 **throughput（→ goodput）** 最大的 batch。Little's Law 给上限 `λ_max = B_max / W_max`（§4.1），throughput-latency 曲线给拐点（§4.2）。
+>
+> **一句话**：throughput 是"每秒产出多少 token/请求"（成本），latency 是"一个请求等多久"（体验），utilization 是"硬件吃没吃满"（资源）。三者被 batch size 反向拉扯，batching tradeoff 找平衡点。
 
 ## 2. 为什么需要它（动机与背景）
 

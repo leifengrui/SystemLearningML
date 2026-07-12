@@ -123,6 +123,20 @@
 ### [[R3 rollout routing replay]]
 
 - [[R3 rollout routing replay]] — 补充（原文件仅批注"补充"；R3=Rollout-Routing-Replay，按 RL rollout 路由与回放补全并移至第六章 Rollout系统；含 routing 策略 / replay buffer / 重要性采样修正 / 与推理系统复用）
+- [[R3 rollout routing replay]] — 这章感觉在胡扯，联网搜一下，这是保证训推一致性的手段（**纠错重写**：之前把 R3 误读为"rollout/routing/replay 三段流水线"是错的；R3 实为 Ma et al. 2025 arXiv:2510.11370 的具体方法，在推理引擎记录 MoE router 专家选择、训练时回放，保证训推走同一专家子网络，消除 MoE 的 Training-Inference Mismatch 稳定 RL 训练；R1/R2/R3 分档；dense 模型不需要；工程坑见 vLLM/verl 修复 PR；与 weight sync/重要性采样正交）
+
+### [[训推不一致]]（新建笔记）
+
+- [[训推不一致]] — 细说一下 什么时候会有训推不一致 怎么衡量（pearson）会有什么影响 新建一个md（**新建型**：TIM=训推双引擎同权重算出不同 logp；来源分层=精度路径/算子实现/kernel融合/归约顺序/KV量化/RoPE base/MoE路由，分数值型与MoE结构型；衡量指标=逐token绝对差+Pearson(>0.99)+KL+$F(\tau)$+JS+ratio偏移，Pearson看形状max_abs_diff保绝对；影响四级=噪声→有偏→KL爆炸→崩溃(MoE)；与staleness区分=同θ引擎差异vs不同θ权重滞后；消除手段分层=精度/算子/超参对齐/bitwise/R3/KV量化对齐）
+- [[R3 rollout routing replay]] — 假设项目里落地 要记录训练端的什么？记录路由选择？怎么记录（**行内型**：纠正方向——R3 在**推理端**记录、训练端回放，只有 R2 才训练端记录；记录对象=每token每MoE层TopK专家**索引**(int32)，不记logits/gating；张量契约`(seq-1,n_layers,topk)`；SGLang `--enable-return-routed-experts`原生/vLLM需patch+`--no-async-scheduling`；随轨迹经TransferQueue/packing/CP切片传到Megatron的`RouterReplay`安装mask，gating仍用softmax(s_train)保梯度；落地8步清单；工程坑见EPLB逻辑ID/dense层偏移/捕获时机）
+
+### [[trajectory generation]]
+
+- [[trajectory generation]] — 回答就回答呗 为什么要叫轨迹（trajectory 词源 MDP 形式化 τ=(s,a,r) 时序路径，时空比喻"agent 在状态空间随时间走出的一条带训练信息的路径"；为什么不叫 sample/output——trajectory 容器要装 logp/value/reward 全套 PPO 才能用；trajectory=episode=rollout 同义辨析；LLM 里 token=action、prompt=s_0、整条 response 即一条轨迹）
+
+### [[batching strategy]]
+
+- [[batching strategy]] — 为什么要 padding 到桶长（padding 是为批处理凑等长张量；pad 到桶长而非全局/batch 最长，是为了让同 batch 长度接近、把浪费率 `1-ḹ/L_max` 压到最低，顺带换静态 shape 利于编译；vLLM 靠 PagedAttention 物理消除 padding 故不用桶，传统框架靠分桶）
 
 ---
 
@@ -185,6 +199,7 @@
 ### [[Fully Sharded Data Parallel]]
 
 - [[Megatron-LM]] — 提到 FSDP 就该讲讲 Megatron，新建一页（**新建型**：Megatron-LM=TP+PP+DP 三维并行工业参考实现；与 FSDP 是两条省显存主流路线——FSDP 分片存储 all-gather 全量计算通信∝参数可跨节点，Megatron 真切分权重每卡只算一片通信∝激活不随模型变大但需 NVLink；列切/行切数学推导、MLP 夹心组合减通信、PP 1F1B/interleaved、并行交叉熵、selective recombination、Megatron vs FSDP 对比表、何时用哪个）
+- [[Megatron-LM]] — 联网搜索 megatron 到底和 fsdp 有什么区别和联系（**行内型+联网**：一句话=Megatron 真切权重每卡算一片通信∝激活需 NVLink 扩展≤8，FSDP 分片存储 all-gather 全量通信∝参数可跨节点扩展数百卡；正交可叠加(超大模型=TP+PP+ZeRO-3 工业配方)；血统不同(NVIDIA vs DeepSpeed/PyTorch FSDP2 DTensor)；正在 DTensor 层融合(Megatron 已内置 megatron-fsdp)；工程选型速记；来源 NVIDIA/PyTorch/ZeRO/Megatron 论文）
 
 ---
 
@@ -242,10 +257,32 @@
 - [[PD分离]] — pd分离也应该新建一个md 我是说prefill decode 分离（**新建型-已存在**：用户要的 Prefill-Decode 分离已有独立笔记 [[PD分离]]，位于 `08-推理系统/推理优化/`，已完整展开两阶段算力特征/P-D池分离/KV cache迁移开销/配比/DistServe·Mooncake·SGLang/池化预取量化；与训推分离撞名不同物，互为对照）
 - [[训推分离]] — 异步其实也属于一种训推分离？（**行内型**：抽象形式上"是"——同属"训/推解耦+weight sync"骨架，rollout侧真跑vLLM推理栈故形式同构+技术复用；严格语义上"不是本条PT-PD"——异步是learner-worker split的运行模式、split是训推分离PT内部子架构、二者嵌套训推分离⊃split∋{同步,异步}；差别锚点=推理侧服务谁：服务用户=训推分离、服务learner=split；三层分离对比表8维）
 
+### [[weight sync mechanism]]
+
+- [[weight sync mechanism]] — 联网搜索 现在主流传输的方法是什么？checkpoint engine？（**行内型+联网**：四条主流路线——①NCCL broadcast（RLHF 热路径绝对主流，vLLM `WeightTransferEngine` 四阶段协议+packed tensor、OpenRLHF `--vllm.sync_backend nccl`、verl）②CUDA IPC（同机 hybrid engine 零拷贝，OpenRLHF `update_weights_from_ipc_handles`）③**Checkpoint Engine**（SGLang 主推，磁盘→多机并行加载加速，broadcast/p2p/all 三模式，PD 冷启动/大模型多机首载，用户猜对了）④共享 FS delta pull（SGLang `/pull_weights`，zstd per-tensor delta+checksum，非 colocated rollout/PD 多副本）；另有 HTTP 控制面+NCCL 数据面在线 serving；四者按场景共存非互斥，附对比表与来源）
+
 ### [[asynchronous training]]
 
 - [[asynchronous training]] — 联网搜业内最新动态，提名 areal/asyncflow/fullyasync（**行内型+联网**：三大主流系统——AReaL(arXiv:2505.24298, 蚂蚁+清华, 全异步+decoupled PPO 容忍8步旧, 2.77×)、AsyncFlow(arXiv:2507.01663, verl-recipe, TransferQueue+CheckpointEngine, 3.81×)、verl fully_async_policy(主仓4模式 on-policy/stream/async-stale/partial-rollout, 2-2.35×)；另附 StreamRL/Magistral/StaleFlow(2026)/Laminar(EuroSys2026)；趋势=全异步解耦+staleness主动治理+数据中枢+权重sync工程化+agentic原生）
 - [[asynchronous training]] — KL这是什么（**行内型**：KL=Kullback-Leibler divergence 相对熵 D_KL(P‖Q)=ΣP log(P/Q)，非负不对称；RL/PPO 里三角色=①策略漂移监控 π_θ vs π_old ②target_kl 早停超则break ③KL penalty/控制 -β·KL(π_θ‖π_ref) 软约束；ratio clip 是单步防飞阀、KL 是累计漂移仪表，异步 stale 让 KL 更易涨故监控更关键；详见 [[KL penalty与KL control]]）
+
+---
+
+## 八、推理系统 / 延迟与吞吐优化
+
+### [[batching tradeoff]]
+
+- [[batching tradeoff]] — perf/throughput 是什么指标 细说一下（**行内型**：三类指标——①吞吐类 throughput=单位时间产出，QPS 请求/秒、TPS token/秒、goodput 满足 SLO 的有效吞吐；②延迟类 latency=一个请求等多久，TTFT 首 token、TPOT 每 token、E2E、P50/P99 分位数；③利用率类 utilization=硬件吃没吃满，GPU SM 占用、显存带宽利用率、KV cache 占用；三者被 batch size 反向拉扯，batching tradeoff 在延迟 SLO + 显存预算双约束下找 throughput/goodput 最大 batch，Little's Law `λ_max=B_max/W_max` 给上限）
+
+### [[KV cache management]]
+
+- [[KV cache management]] — kvcache 能由调度器自动管理吗？自动把请求调度到更多命中的实例上？（**行内型+联网**：能——多实例层有 KV-cache-aware / prefix-aware router 把同前缀请求路由到命中高的 pod；近似路由按历史预测、精确路由(vLLM KVEvents/llm-d kvcache.Index)实时窥探 block-hash→pod；llm-d 实测精确路由 TTFT 快 57×、吞吐翻倍 vs 盲调度；选型梯度 random→load→approximate→precise；与 §2 三层管理的 ③ 调度器层在多实例维度的延伸正交叠加）
+- [[FP8量化方案]] — fp8 的不同量化方案展开（**新建型**：FP8=E4M3/E5M2 两格式 × per-tensor/per-channel/per-token/per-block(MX)/delayed scaling 缩放策略的组合；训练 TE 默认前向 E4M3+per-tensor delayed、反向 E5M2，推理 vLLM/TRT-LLM 权重 per-channel+激活 per-token+KV E4M3，方案不等价是 [[训推不一致]] 精度路径 TIM 主因；MXFP8 是训推统一希望；TE/vLLM 代码、per-tensor vs per-block 精度推导、6 条误区）
+- [[KV cache management]] — prefill 和 decode 本质都是算 KV，分两阶段只因"token 拿到的时机不同"对吗？（**行内型**：大方向对但只抓到表象——根本原因是自回归生成的**串行因果依赖**使 decode 无法并行（第 t 个 query 要等 t-1 步 argmax 出来才能算），非仅 prompt 提前给；并衍生 compute-bound vs memory-bound 两套截然不同的 kernel(GEMM vs GEMV)/调度/指标体系(TTFT vs TPOT)；prefill 一次性并行填 N 个 K/V 进 cache，decode 每步 append 1 个；两阶段抢资源冲突催生 chunked prefill / PD 分离 / continuous batching 等调度策略）
+
+### [[continuous batching]]
+
+- [[continuous batching]] — 分块预填是怎么做到节约时间的（**行内型**：核心澄清——chunked prefill 几乎不减 FLOPs，省的是等待/闲置/重算。五条收益：①长 prefill 不再独占 GPU 阻塞 decode（消除饿死与 TPOT 尖峰）②TTFT 降（首 chunk 算完即进 decode）③KV 增量分配免 preemption 重算（零存整取 vs 一次性大额申请）④prefill 算力与 decode 带宽交替吃满 SM/带宽更均衡⑤每 iteration 重新评估显存预算做动态反馈控。数学直觉对比 B·T_P 的 decode 产能冻结 vs 接近0损失。类比超长货车拆小车混行。误区=不减FLOPs/不是总提速/chunk太小反慢/与prefix caching正交非同物）
 
 ---
 

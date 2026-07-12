@@ -13,6 +13,47 @@
 > - **[[inference worker]]**：部署侧服务，只返生成 token 给用户。
 > 前者重训练信息完整性（logp/value），后者重延迟/质量。
 
+> [!note] 解答：为什么把这个东西叫"轨迹（trajectory）"？
+> 这名字来自**经典强化学习的 MDP 形式化**，不是 LLM 圈新造的词。
+>
+> ### 一、源头：MDP 里的 trajectory
+> 在马尔可夫决策过程（MDP）里，agent 在**时间维度**上一边走一边决策，走出的一条"路径"就叫 trajectory，记作 $\tau$：
+> $$
+> \tau=(s_0,a_0,r_1,s_1,a_1,r_2,\dots,s_T)
+> $$
+> 它本质是 $(s_t,a_t,r_{t+1})$ 这条**时序三元组序列**。"轨迹"是个**时空比喻**：agent 在**状态空间**里随**时间**移动留下的一条路径，就像物理里抛物运动在时空中画出的一道轨迹——只不过这里的"位置"是状态 $s$，"每一步的推力"是动作 $a$，"沿途收到的反馈"是奖励 $r$。所以 trajectory = agent 走过的一条带时间戳的路径。
+>
+> ### 二、为什么不直接叫"sample / output / 数据"
+> 因为 trajectory 强调的不是"一段文字"，而是**带完整训练信息的时序决策序列**：
+>
+> | 叫法 | 隐含信息 | 够不够训练 |
+> |---|---|---|
+> | sample / output | 只有一段生成 token | ❌ 丢了 logp/value/reward |
+> | sequence | 只是 token 串 | ❌ 没有"谁采的、概率多少、回报多少" |
+> | **trajectory（轨迹）** | $(s,a,r,\log\pi,v)$ 全套 + 时序结构 | ✅ PPO 直接吃 |
+>
+> PPO 算 ratio $\rho=\pi_{\theta_{\text{new}}}/\pi_{\theta_{\text{old}}}$ 需要 $\log\pi_{\theta_{\text{old}}}$，算 advantage 需要 value $V(s_t)$，算回报需要 reward——这些只有 trajectory 这个概念容器才装得下。叫"输出"会让人误以为只要一段文字就够了。
+>
+> ### 三、LLM/RLHF 里"轨迹"对应什么
+> RLHF 把 token 当 action，prompt 当初始状态，于是 trajectory 退化成 token 级：
+> $$
+> \tau = \text{prompt}(s_0)\to a_0\to a_1\to\dots\to a_T,\quad\text{带每 token 的 }(r_t,\log\pi_t,V_t)
+> $$
+> 也就是说，"prompt→response"不是一段静态文本，而是**策略 $\pi_\theta$ 在语言状态空间里走出的那条路径**。每生成一个 token = agent 在那个状态选了一个 action = 走了一步。整条 response 就是这条轨迹。
+>
+> ### 四、易混澄清
+> - **trajectory = episode = rollout = 一次采样**：四个词在 RLHF 里基本同义，都指"一条从开始到结束的采样序列"，只是不同社区习惯。
+>   - trajectory：偏 RL 理论，强调时序状态-动作路径（本篇用此，贴合 PPO 形式化）。
+>   - episode：偏控制论/游戏，强调"一回合"。
+>   - rollout：偏工程，强调"用当前策略跑一遍采数据"这个动作。
+> - **trajectory vs transition**：trajectory 是**整条**序列 $\tau$；transition 是**一步** $(s_t,a_t,r_{t+1},s_{t+1})$。一条 trajectory 由多个 transition 组成。
+> - **trajectory vs batch**：trajectory 是**一条**采样；batch 是**一批** trajectory 凑成训练 batch。
+>
+> ### 五、一句话记忆
+> **trajectory（轨迹）= agent 在状态空间里随时间走出的一条带训练信息的路径。** 叫"轨迹"而不是"输出"，是因为它要装的不只是文字，还有"每一步选了啥、概率多大、回报多少、价值几何"——这些才是 PPO 能算的料。
+>
+> 相关：[[trajectory generation]]、[[rollout worker]]、[[MDP]]、[[PPO clipped objective]]、[[GAE]]
+
 ## 2. 为什么需要它（动机与背景）
 
 on-policy RL 必须用当前 $\theta$ 采数据：
@@ -45,13 +86,13 @@ RLHF 轨迹（token 级）：
 
 ### 3.2 采样方式（探索-利用）
 
-| 方式 | 机制 | 探索性 | 用途 |
-|---|---|---|---|
-| **greedy** | $\arg\max$ 最高概率 | 无（确定性） | 评估/部署，**不训练** |
-| **temperature** | $\text{softmax}(\text{logits}/T)$，$T$ 大越随机 | $T$ 大高 | 训练采数据 |
-| **top-k** | 仅 top-k token 采样 | 中 | 限低概率噪声 |
-| **top-p (nucleus)** | 累积概率 $p$ 内采样 | 中 | 动态裁剪长尾 |
-| **top-p + temperature** | 先 top-p 再温度缩放 | 可调 | 训练常用 |
+| 方式                      | 机制                                         | 探索性    | 用途            |
+| ----------------------- | ------------------------------------------ | ------ | ------------- |
+| **greedy**              | $\arg\max$ 最高概率                            | 无（确定性） | 评估/部署，**不训练** |
+| **temperature**         | $\text{softmax}(\text{logits}/T)$，$T$ 大越随机 | $T$ 大高 | 训练采数据         |
+| **top-k**               | 仅 top-k token 采样                           | 中      | 限低概率噪声        |
+| **top-p (nucleus)**     | 累积概率 $p$ 内采样                               | 中      | 动态裁剪长尾        |
+| **top-p + temperature** | 先 top-p 再温度缩放                              | 可调     | 训练常用          |
 
 训练采数据用 top-p + temperature（如 $p=0.9,T=0.7\sim1.0$），平衡多样性与质量。greedy 无探索，数据单一，策略无法改进。
 

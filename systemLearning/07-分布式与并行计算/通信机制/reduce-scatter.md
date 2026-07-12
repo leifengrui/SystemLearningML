@@ -5,6 +5,7 @@
 > **难度**: 中（需懂集合通信 + ring 拓扑）
 
 ## 1. 一句话定义
+![[Pasted image 20260709113122.png|418]]
 
 **reduce-scatter（归约分散）** 是集合通信原语：**每 rank 持有完整数据 $V_i$，经归约（sum）后按片分散，每 rank 得到归约结果的一片 $R_j$**（各 rank 片不同）。它是 [[all-reduce]] 的"前半"——all-reduce = reduce-scatter + [[AllGather]]。主要用途：[[Fully Sharded Data Parallel|ZeRO-2/3]] 梯度归约分片（各 rank 只存/更新自己负责的梯度片，省显存）。ring reduce-scatter 每卡通信量 $(N-1)/N\cdot V$（带宽最优）。[[NCCL通信拓扑]] 底层实现。与 [[AllGather]]（片→全量）方向相反：reduce-scatter 是全量→归约片。
 

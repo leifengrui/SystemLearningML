@@ -13,6 +13,51 @@
 > - **PT → PD**（部署）：PT 训新版本推 PD，PD 热切换升级服务。
 > - **worker → learner**（反向，本篇不重点）：worker 采的数据回传 learner（数据 sync，非 weight）。
 
+> [!note] 解答：现在主流的权重传输方法（2025–2026 联网调研）
+> 用户问"现在主流传输方法是什么？checkpoint engine？"——**checkpoint engine 确实是主流方法之一**（SGLang 主推），但**最主流的 RLHF 热路径 sync 仍是 NCCL broadcast**。下面按场景把当前业界四条主流路线讲清。
+>
+> ### 路线一：NCCL broadcast（训练热路径绝对主流）
+> **适用**：trainer↔rollout engine 同集群、需低延迟高频 sync（RLHF 每步/每 batch 推一次）。
+> - **vLLM 原生 `WeightTransferEngine`**（RFC #31848 已落地，见 `vllm/distributed/weight_transfer/nccl_engine.py`）：trainer rank 0 与所有 vLLM worker 组一个 `StatelessProcessGroup`（torch.distributed 无关的轻量组），trainer broadcast 权重、worker 接收加载。四阶段协议 `init_weight_transfer_engine` → `start_weight_update` → `update_weights`（可分块多次）→ `finish_weight_update`。**packed tensor** 把多个小张量打包成大连续 buffer + 双/三缓冲 + 独立 CUDA stream 做 pack/broadcast/unpack overlap，吞吐显著提升（实现参考 NeMo-RL 的 packed tensor）。支持多机多卡、NVLink/IB。还派生 `sparse_nccl` 后端做稀疏 in-place patch（TP=PP=1 MVP）。
+> - **OpenRLHF**：`--vllm.sync_backend nccl`，trainer 每 step 后 broadcast 给 vLLM；Hybrid Engine 模式下 vLLM sleep/wake 切换，sync 用 NCCL；async+partial rollout 模式下 vLLM 不停，pause 在飞请求→swap 权重→resume（混入少量 off-policy 噪声换全 overlap）。
+> - **verl**：`WeightSyncClient/Server` + NCCL broadcast，每 episode batch sync。
+> - **为什么主流**：GPU 间 NVLink/IB 带宽最高（数百 GB/s），broadcast 一对多语义正好匹配"trainer 单源推多 worker"，延迟毫秒级，是唯一能扛住 RLHF 每 step sync 的方案。本笔记 §3.4/§8.1 写的 broadcast vs AllGather 即此。
+>
+> ### 路线二：CUDA IPC（同机 hybrid engine 专用）
+> **适用**：trainer 与 vLLM **同一台机器同卡组** colocate（Hybrid Engine 模式）。
+> - OpenRLHF `ColocateWorkerExtension.update_weights_from_ipc_handles`：trainer 把权重张量的 CUDA IPC handle 传给 vLLM worker，worker 通过共享内存句柄直接拿到显存指针 `load_weights`，**零拷贝**。
+> - 比 NCCL broadcast 更快（同机不走网卡），但**只限同机**；跨机退回 NCCL。
+> - vLLM 的 `WeightTransferEngine` 也把 IPC 作为可插拔 backend 之一（`backend="ipc"`）。
+>
+> ### 路线三：Checkpoint Engine（SGLang 主推，冷启动+多机加载加速）
+> **适用**：**PD 部署侧冷启动/大模型多机加载**，以及非 colocated rollout 的权重更新。**这正是用户问的那个。**
+> - SGLang 的 **checkpoint engine**（`sglang.srt.checkpoint_engine`）是一个**分布式 checkpoint 加载系统**：把权重加载并行化到多进程多节点，每节点只从磁盘读一部分→有效放大磁盘带宽；`--load-format dummy` 让磁盘→CPU 搬运与 CUDA graph 捕获等其他初始化**overlap**。三种 update method：`broadcast`（加载进程 broadcast 到推理进程）、`p2p`（点对点直传）、`all`（两者结合）。实测 DeepSeek-R1 on H20-3e 双节点加载加速 ~20s。
+> - **SGLang 还在整合 ckpt-engine 做 weight sync 加速**（issue #10464, 2025-09），目标是用它加速**在线权重同步**而非只是冷启动。
+> - **本质区别**：NCCL broadcast 是"GPU 显存→GPU 显存"的热路径流式传输；checkpoint engine 是"磁盘/共享存储→多机并行加载→推理进程"的冷/温路径加载加速器。前者管"每步推一次"，后者管"快速把一个新版本从盘上搬起来"。**PD 升级、新副本拉起、大模型多机首次加载**用 checkpoint engine；**RLHF 训练中每 step sync** 用 NCCL。
+>
+> ### 路线四：共享文件系统 delta pull（非 colocated rollout / PD 多副本）
+> **适用**：trainer 与 rollout/PD 不在同一集群、靠共享存储解耦。
+> - SGLang `/pull_weights`（PR #30366）：trainer 每次权重更新发布一个版本目录 `weight_v{N:06d}/` 到共享 FS——可以是完整 HF checkpoint，也可以是 **zstd 压缩的 per-tensor byte delta**（xor/overwrite + per-tensor checksum）。engine 端 `POST /pull_weights` 把本机 checkpoint 拉到目标版本：从 ≤target 的最新 full 版起播，再按序 in-place mmap apply delta 链，跨 tensor 并行；checksum 不符或乱序立即 raise（绝不服务坏权重）；同机多 rank 用 flock 折叠成一次 pull。trainer 只需对接每 engine 一个 endpoint。实测 tp16 跨 2 节点、3 次 delta sync（~0.4% 密度、~0.7–0.8GB 线上）全 checksum 通过。
+> - 之后 engine 用普通 `/update_weights_from_disk` reload——weight loader 完全不感知 delta 格式。
+> - 这就是本笔记 §3.2 的 **pull 模式** + §3.1 的**增量/差分**在工业界的落地形态。
+>
+> ### 四条路线对比
+> | 路线 | 传输介质 | 典型场景 | 延迟 | 带宽 | 代表实现 |
+> |---|---|---|---|---|---|
+> | **NCCL broadcast** | GPU↔GPU (NVLink/IB) | RLHF 每 step sync、colocated | 毫秒级 | 数百 GB/s | vLLM `WeightTransferEngine`/OpenRLHF/verl |
+> | **CUDA IPC** | 同机共享显存句柄 | Hybrid Engine 同机 colocate | 微秒级、零拷贝 | 显存带宽 | OpenRLHF `update_weights_from_ipc_handles` |
+> | **Checkpoint Engine** | 磁盘→多机并行加载 | PD 冷启动/大模型多机首载/版本升级 | 秒~十秒级 | 放大磁盘带宽 | SGLang `checkpoint_engine` (broadcast/p2p/all) |
+> | **共享 FS delta pull** | 共享存储 + zstd delta | 非 colocated rollout/PD 多副本 | 秒级 | 增量后 ~0.7GB/次 | SGLang `/pull_weights` |
+>
+> ### 还有：HTTP 控制面 + NCCL 数据面（在线 serving）
+> vLLM 还支持 **HTTP 控制面 + NCCL 数据面**分离：`POST /init_weight_transfer`、`POST /update_weights`、`POST /finalize_weight_update` 走 HTTP 下发元数据（names/shapes/dtype），实际张量走 NCCL broadcast。这样在线 serving 的 vLLM HTTP server 也能做高频 weight sync，不必停服。见 vLLM `examples/rl/rlhf_http_nccl.py`。
+>
+> ### 与本笔记的映射
+> - 本笔记 §3.4 列的"NCCL AllGather / 参数服务器 / RPC+存储 / 压缩"四项，对应：NCCL broadcast=路线一、参数服务器≈路线三的 checkpoint engine（CPU 内存中转）、RPC+存储=路线四的共享 FS pull、压缩=路线四的 zstd delta。**笔记里写的方向是对的，只是 2025 后业界把它们工程化成了具体产品**（vLLM WeightTransferEngine / SGLang checkpoint engine / SGLang /pull_weights）。
+> - **结论**：RLHF 训练热路径主流 = **NCCL broadcast**（vLLM/OpenRLHF/verl 都用）；PD 冷启动/多机加载主流 = **checkpoint engine**（SGLang 主推，用户猜对了）；非 colocated rollout = **共享 FS delta pull**；同机 colocate = **CUDA IPC**。四者按场景共存，不是互斥。
+>
+> **来源**：vLLM RFC #31848 / `docs/training/weight_transfer/nccl.md` / `docs/training/layerwise/`；SGLang issue #10464 / `checkpoint-engine.html` / PR #30366 / `pd_disaggregation.md`；OpenRLHF `architecture.html` / `async_training.html` / `hybrid_engine.rst` / vLLM blog 2025-04-23。截至 2026-07。
+
 ## 2. 为什么需要它（动机与背景）
 
 异步 [[训推分离]] 必然产生 [[stale policy problem]]：

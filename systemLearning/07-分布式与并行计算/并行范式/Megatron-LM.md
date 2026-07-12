@@ -11,8 +11,32 @@ aliases: [Megatron-LM, Megatron, Megatron LM]
 ## 1. 一句话定义
 
 **Megatron-LM** 是 NVIDIA 团队（Shoeybi 等，2019 起）开源的**大语言模型训练框架**，也是**张量并行（TP）/ 流水线并行（PP）/ 数据并行（DP）三维并行的参考实现**。它把"单层权重按维度切到多卡（ColumnParallel/RowParallel）""层段跨 stage 流水""数据跨副本复制"三件事整合成一套可在数千卡上训万亿参数模型的工程框架，论文级的 [[3D parallelism]] 架构几乎都直接叫"Megatron-style"。它和 [[Fully Sharded Data Parallel|FSDP]]/[[ZeRO (DeepSpeed)|ZeRO]] 是两条不同的省显存路线：**FSDP/ZeRO 用"分片存储 + all-gather 临时聚合"省显存，每层仍全量参数参与计算；Megatron 用"真·切分权重，每卡只算自己那块"省显存，每层只在边界做一次 AllReduce**。当前工业界大模型预训练常把两者结合（Megatron 的 TP/PP + FSDP 的 ZeRO-3 数据并行分片）。
-
-> [!note] Megatron-LM 是什么层面的东西
+> [!note] 解答（联网核实）：Megatron 到底和 FSDP 有什么区别和联系
+> 联网核对 NVIDIA / PyTorch / DeepSpeed 官方与多篇技术综述后，本笔记 §1、§6 已给的结论**与最新（2025–2026）资料一致**，这里再压缩成一句话 + 一张表 + 三条联系，便于检索：
+>
+> **一句话**：Megatron（张量/流水线并行）和 FSDP（全分片数据并行）是**两条正交的省显存路线**——Megatron **真把权重按维度切开，每卡只算自己那片，通信量∝激活（不随模型变大），但要 NVLink**；FSDP **权重仍全量参与计算，只是分片存储，用时 all-gather 临时聚合再丢，通信量∝参数（模型越大越重），但能走跨节点 IB、扩展到数百卡**（来源：[Martynas Šubonis 2025](https://martynassubonis.substack.com/p/tensor-and-fully-sharded-data-parallelism)、[NVIDIA Megatron-Core 并行指南](https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/parallelism-guide.html)、[PyTorch/Megatron FSDP doc](https://github.com/NVIDIA/Megatron-LM/blob/main/docs/user-guide/features/megatron_fsdp.md)）。
+>
+> | 维度 | Megatron（TP 为主） | FSDP（ZeRO-3） |
+> |---|---|---|
+> | 切的对象 | **权重本身**（列切/行切，每卡只算 1/N 片） | 权重分片**存储**，计算时 all-gather 全量再丢 |
+> | 每层每卡算的 | 自己那 1/N 权重对应的输出 | 全量权重（聚合后） |
+> | 通信量/层 | AllReduce 激活 $\propto BSd$（**与激活同阶，不随模型变大**） | all-gather 参数 + reduce-scatter 梯度 $\propto d^2$（**与参数同阶，模型越大越重**） |
+> | 通信频率 | 每层 2 次（前向+反向 AllReduce） | 每层 4 次（前向 gather + 反向 gather + reduce-scatter） |
+> | 互联要求 | **必须 NVLink**（每层都通信，节点内） | 可走 IB（通信没那么频繁，跨节点） |
+> | 扩展上限 | TP size 通常 $\le 8$（受 NVLink 节点内） | 可跨多节点扩展到数百卡（ZeRO-3 是数据并行维） |
+> | 适合场景 | 单层大、节点内（70B+/MoE） | 模型大但单层不算特别大、跨节点（7B–30B） |
+>
+> **三条联系**（关键）：
+> 1. **正交可叠加**——不是二选一。超大模型（405B/万亿）工业配方是 **TP（节点内 8 卡 NVLink）+ PP（跨节点流水）+ DP/ZeRO-3（跨节点数据并行分片）**，即 Megatron-DeepSpeed / NeMo 的标准做法（来源：[NVIDIA NeMo Framework – FSDP with TP](https://docs.nvidia.com/nemo-framework/)、Megatron-LM PTD-P 论文 Narayanan 2021）。
+> 2. **血统不同**——Megatron 来自 NVIDIA（Shoeybi 2019，TP）→ Megatron 2/3（PP+selective recomputation）；FSDP 来自 DeepSpeed ZeRO 论文（Rajbhandari 2020），PyTorch 把 ZeRO-3 原生实现叫 FSDP，2025+ 升级到基于 **DTensor** 的 FSDP2。
+> 3. **正在融合**——Megatron-LM 仓库现已内置 `megatron-fsdp`（基于 DTensor 的非均匀分片 FSDP 单元），与自家 TP/PP 共用 DTensor 表示；PyTorch FSDP2 也用 DTensor 统一表达 TP/PP/DP，未来两者在 DTensor 层面会自然组合，不再需要两套独立层实现（来源：[Megatron-LM megatron_fsdp.md](https://github.com/NVIDIA/Megatron-LM/blob/main/docs/user-guide/features/megatron_fsdp.md)、本笔记 §8.4）。
+>
+> > [!tip] 工程选型速记（联网资料共识）
+> > - **7B–30B、只有 IB 跨节点** → FSDP/FSDP2，一行 `FSDP(model)`，简单、扩展好；
+> > - **70B+/MoE、有 NVLink 机器** → 上 Megatron TP（节点内 8 卡）+ PP + DP/ZeRO-3，单层权重过大时 FSDP 的 all-gather 全量参数通信太重；
+> > - **节点内 TP 别跨节点**——TP 跨节点性能崩塌，跨节点留给 PP/DP/ZeRO。
+>
+> 来源：[Martynas Šubonis – Tensor and Fully Sharded Data Parallelism (2025-01)](https://martynassubonis.substack.com/p/tensor-and-fully-sharded-data-parallelism)、[NVIDIA Megatron-Core Parallelism Guide](https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/parallelism-guide.html)、[Megatron-LM megatron_fsdp 文档](https://github.com/NVIDIA/Megatron-LM/blob/main/docs/user-guide/features/megatron_fsdp.md)、[ZeRO 论文 arXiv:1910.02054](https://arxiv.org/abs/1910.02054)、[Megatron-LM 论文 arXiv:1909.08053](https://arxiv.org/abs/1909.08053)。详见本笔记 §1、§6 对比表与 [[Fully Sharded Data Parallel]]、[[ZeRO (DeepSpeed)]]、[[3D parallelism]]。
 > - **不是**一个像 PyTorch 那样的通用深度学习框架，而是**建立在 PyTorch 之上的大模型训练"参考实现/工程库"**：它提供 `ColumnParallelLinear`/`RowParallelLinear`/`RowParallelEmbedding` 等切分层、PP 的 `PipelineSchedule`、跨 rank 的 RNG/loss 聚合、checkpoint 格式等，你用它来"搭"一个 3D 并行的训练脚本。
 > - **论文血统**：Megatron 1（2019，TP）/Megatron 2（2021，PP+selective recomputation）/Megatron 3（2022， interleaved schedule + 拓扑感知）逐代演进，是大模型并行训练的"标准教材"，DeepSpeed/Megatron-DeepSpeed/vLLM 的 TP 推理都源自它。
 > - **和 [[FSDP]] 的关系**：FSDP 解决"数据并行维度上的显存"（参数全量参与计算但分片存），Megatron 解决"模型并行维度上的显存"（参数本身被切，每卡只算一片）。两者正交、可叠加。批注"提到了 FSDP 就应该讲一讲 Megatron"正是因为两者是 LLM 训练省显存的**两大主流路线**，对比着学才完整。

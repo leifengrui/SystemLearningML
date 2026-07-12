@@ -4,6 +4,9 @@
 > **所属模块**: [[03-PyTorch与框架工程]]
 > **难度**: 基础（已被 DDP 取代，作为对比理解）
 
+> [!note] 已展开为独立笔记：[[Context Parallel]]
+> 你要的"新建一个 context parallel 并联网搜索"已落盘。笔记位于 `03-PyTorch与框架工程/并行训练/Context Parallel.md`，并已联网核对 NVIDIA Megatron Core 官方文档与 2026-01 Dynamic CP 博客。要点：CP 切**序列长度维度 $S$**（与 DP 切 batch、TP 切权重、PP 切层正交），把注意力 $\mathcal{O}(S^2)$ 算力与 $\mathcal{O}(S)$ 激活显存按 CP 数线性摊薄；两条实现路线——**Ring Attention**（环形 P2P 传 KV，适合 head 少/超长）与 **DeepSpeed Ulysses**（all-toall 重排 head，适合 head 多）；关键坑是跨块 RoPE 全局位置、causal mask 右侧全 0；2026 新进展 **Dynamic CP** 按变长序列动态选 CP size，Llama-13B 实测 +1.48×。详见 [[Context Parallel]]。
+
 ## 1. 一句话定义
 
 **`nn.DataParallel`（DP）** 是 PyTorch 早期的**单进程多线程数据并行**方案：在一个进程里开多个线程，把模型**复制**到各 GPU，把一个 batch **按维度 0 切分**到各卡上前向、反向时把各卡梯度**归约回主卡（cuda:0）** 再更新。它因**主卡瓶颈、GIL 与线程开销、不支持跨机、被 DDP 全面取代**而基本退出主流，仅在调试或极小规模偶有使用。

@@ -63,6 +63,47 @@ rank 组织为 3D 网格 $(D, T, P)$：
 
 映射原则：**TP 节点内**（需最快互联，因每层通信）、**PP/DP 跨节点**（通信稀疏/中频，容忍 IB）。这使 3D 充分利用集群拓扑。
 
+> [!note] 解答：为什么 TP 每层都要通信，而且必须用最快的 NVLink？
+>
+> 这是理解 3D 拓扑映射的核心问题，要分两层讲清：**为什么 TP 每层都通信** 和 **为什么这个通信对带宽/延迟最敏感、必须放节点内 NVLink**。
+>
+> ### 一、为什么 TP 每层都要通信
+>
+> [[Tensor Parallel|TP]] 把**单个层的权重**切开（如把一个 `nn.Linear` 的输出维度切到 $T$ 张卡，每卡只算输出的 $1/T$）。但前向的**下一层**需要的是**完整的、未切分的激活**，于是每卡算完自己那片后，必须立刻做一次 **AllGather**（或前向 AllReduce、反向对应 reduce-scatter）把分片拼回完整激活，下一层才能继续。这个"切→算→拼"发生在**每一个 TP 切分的层**上：
+>
+> - 一个 Transformer 层里至少有：QKV 投影后的 AllReduce、attention 输出投影后的 AllReduce、MLP up-proj 后的 AllReduce、MLP down-proj 后的 AllReduce——**每个 TP 层 2~4 次集合通信**；
+> - 模型有 $L$ 层，一次前向+反向就是 $\mathcal{O}(L)$ 次 AllReduce，频率极高（"每层"字面意义）。
+>
+> 对比另外两维：
+> - **PP** 只在 **stage 边界**（$P-1$ 个点）点对点传激活，频率 $\mathcal{O}(P)$，远低于 $\mathcal{O}(L)$；
+> - **DP** 只在**反向结束后**做一次梯度 AllReduce，频率 $\mathcal{O}(1)$/step。
+> - 所以三者的通信频率排序：**TP ≫ PP > DP**，TP 是"高频小消息"，PP/DP 是"低频大消息"。
+>
+> ### 二、为什么 TP 通信对带宽/延迟最敏感（必须 NVLink）
+>
+> 通信开销 = **延迟 × 次数 + 数据量 / 带宽**。对 TP：
+>
+> 1. **次数多**：$\mathcal{O}(L)$ 次/step，每次都有 **launch 延迟**（NCCL kernel 启动 ~5-10µs）和 **同步延迟**（AllReduce 要等最慢的卡）。次数一多，延迟项被放大成 $L \times \text{latency}$，直接吃掉计算时间。低延迟互联（NVLink，~1-2µs 跳）能把这压到最小；跨节点 IB（~5-10µs 跳 + 协议栈开销）会让 $L \times$ latency 爆炸。
+> 2. **处于关键路径**：TP 的 AllReduce 在**前向/反向的计算流里串行**——算完这层等 AllReduce 完才能算下一层，**无法用别的工作填满**（不像 DP 梯度 AllReduce 可以和下一层计算 overlap）。所以 TP 通信的每一纳秒都直接变成 GPU 空闲气泡。
+> 3. **带宽要求也高**：每次传的是**整层激活** $B \cdot d$（如 GPT-3 175B 一层激活 ~$B\times12288$ 元素），量虽不算巨大，但乘以 $L$ 次后总流量 $2LBd$ 是三维里最大的。带宽不够会进一步拖慢。
+>
+> ### 三、为什么 PP/DP 能容忍跨节点 IB
+>
+> - **PP** 点对点传激活，次数少（$\mathcal{O}(P)$），且可用 **1F1B/interleaved 调度** 把通信**藏进**其他 stage 的计算里（overlap），对延迟不敏感；
+> - **DP** 的梯度 AllReduce 虽然**数据量大**（$P_{\text{total}}/N$），但**每 step 只一次**，且标准做法是**梯度分桶 + backward overlap**：反向算完一个参数桶就 async AllReduce，和后续反向计算重叠，带宽够（IB ~50-100GB/s）即可，对延迟不敏感。
+>
+> ### 四、量化对比
+>
+> | 维度 | 通信频率 | 是否在关键路径 | 可否 overlap | 互联要求 |
+> |---|---|---|---|---|
+> | **TP** | $\mathcal{O}(L)$/step（极高） | 是（串行阻塞） | 几乎不可 | **NVLink（节点内）**，~300-900 GB/s、~1µs |
+> | **PP** | $\mathcal{O}(P)$/step（低） | 部分 | 可（1F1B） | IB 跨节点可，~50-100 GB/s |
+> | **DP** | $\mathcal{O}(1)$/step（最低） | 否（反向后） | 可（桶化 overlap） | IB 跨节点可 |
+>
+> ### 五、结论
+>
+> TP 的通信是"**高频 + 关键路径阻塞 + 不可 overlap**"三重最差组合，只有节点内 NVLink（带宽最高、延迟最低、还走 NVSwitch 不经 PCIe/IB 协议栈）能撑住；一旦 TP 跨节点走 IB，$L \times \text{latency}$ 会把训练 MFU 打到地板。所以 3D 的铁律是 **TP=节点内 GPU 数（≤8）**，把跨节点的工作交给对延迟不敏感的 PP/DP。这也是为什么 TP 几乎不超 8、而 PP/DP 可以铺到几百卡的原因。
+
 ### 3.4 典型配置
 
 例：1024 卡训 175B 模型，8 卡/节点（128 节点）：
@@ -75,6 +116,34 @@ rank 组织为 3D 网格 $(D, T, P)$：
 ### 3.5 ZeRO + 3D
 
 ZeRO（[[Fully Sharded Data Parallel]]）在 DP 维进一步切优化器状态/梯度/权重：
+
+> [!note] 解答：ZeRO 就是 FSDP 吗？
+> **不完全是，但 ZeRO-3 ≈ FSDP**。两者关系是"算法思想 ↔ 工程实现"，需要分层看：
+>
+> | 项 | ZeRO | FSDP |
+> |---|---|---|
+> | **是什么** | DeepSpeed 团队 2019 论文（*ZeRO: Memory Optimizations Toward Training Trillion Parameter Models*, arXiv:1910.02054）提出的**显存优化算法/阶段划分** | PyTorch 官方 2022 起原生实现的**分片数据并行类**（`torch.distributed.fsdp.FullyShardedDataParallel`） |
+> | **层级** | 算法/方法论（三档 ZeRO-1/2/3 的命名与思想） | 工程实现（一个具体的 `nn.Module` wrapper） |
+> | **分几档** | 三档渐进：<br>• ZeRO-1：只切**优化器状态**<br>• ZeRO-2：+切**梯度**<br>• ZeRO-3：+切**权重**（需 AllGather 算时聚合） | 默认实现的是 **ZeRO-3 档**（切权重+梯度+优化器状态三者全切），通过 `ShardingStrategy` 可退化到 ZeRO-2（`SHARD_GRAD_OP`） |
+> | **归属框架** | DeepSpeed（微软）库内算法 | PyTorch 原生 `torch.distributed` |
+> | **关系** | ZeRO-3 的**思想**（权重分片存、算时 all-gather 聚合、反向 reduce-scatter 分梯度） | FSDP 是 ZeRO-3 思想在 **PyTorch 原生**里的工程落地 |
+>
+> ### 精确说法
+> - **"ZeRO 是 FSDP"** ❌ 错。ZeRO 是三档算法族（1/2/3），FSDP 只对应其中 **ZeRO-3 这一档**。
+> - **"ZeRO-3 就是 FSDP"** ✅ 基本对。FSDP = PyTorch 原生实现的 ZeRO-3 思路；DeepSpeed 也有自己实现 ZeRO-3 的 `ZeroStage3`，功能等价但实现不同。
+> - **"FSDP 是 ZeRO 的 PyTorch 原生版"** ✅ 最准确的说法。
+>
+> ### 为什么会混
+> ZeRO 是 DeepSpeed 论文里提出的**算法命名**，FSDP 是 PyTorch 把 ZeRO-3 思路吸收进原生框架后起的**实现命名**。社区里"ZeRO-3""FSDP""ZeRO-3/FSDP"常混用指代同一件事——**参数全切分的数据并行**。但严格地：
+> - 谈**算法分档**（切到哪一级）→ 用 ZeRO（1/2/3）；
+> - 谈**PyTorch 原生那个类** → 用 FSDP；
+> - DeepSpeed 库里那个 → 叫 `DeepSpeed-ZeRO-3`，不叫 FSDP。
+>
+> ### 与本节（3D + ZeRO）的关系
+> 本笔记说的"3D + ZeRO-3"是指在 3D 并行 $(D,T,P)$ 的 **DP 维**上再叠 ZeRO-3（即 FSDP 式参数分片），把 DP 域的权重/梯度/优化器状态进一步切到 $D$ 份，每卡显存 $\sim P_{\text{total}}/(T\cdot P\cdot D^2)$，训万亿参数才可行。这里 ZeRO-3 与 FSDP 是**同一招**，写哪个名字都行，社区习惯写 ZeRO。
+>
+> 详见 [[Fully Sharded Data Parallel]]（FSDP 实现详解）、[[ZeRO (DeepSpeed)]]（三档算法详解，待展开）。
+
 - **ZeRO-1**：切优化器状态（DP 域分片）；
 - **ZeRO-2**：+切梯度；
 - **ZeRO-3**：+切权重（需 AllGather 算时）；

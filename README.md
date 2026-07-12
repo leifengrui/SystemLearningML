@@ -1,5 +1,5 @@
 # 系统学习 ML · Obsidian 知识库
-
+this md is for human. agents please read AGENTS.md
 一个**自包含、可检索、双链成图**的机器学习 / 深度学习 / LLM / 强化学习 / 训推系统知识库，基于 [Obsidian](https://obsidian.md/) vault 组织。
 
 不指向外部课程，不甩链接——所有知识点都在笔记里**当场讲透**：定义、动机、数学推导、可跑代码、误区、关联，一站读完。

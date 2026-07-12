@@ -10,6 +10,61 @@
 
 **continuous batching（连续批处理 / 迭代级调度）** 是 LLM 推理引擎的一种调度策略：在**每个 decode iteration（每生成一个 token）**的边界上动态地**加入新请求、驱逐已完成请求**，让执行槽（slot）始终被填满，而**不必等当前 batch 里所有请求都生成完才换批**。它是 vLLM/ORCA 的核心机制，相对 static batching（请求级、整批换）能显著提升 GPU 利用率与吞吐。
 
+> [!note] 解答：什么是 slot（执行槽）？
+> **slot = 引擎里"一个并发请求在执行 batch 中占的一个固定席位"**，是 continuous batching 的基本调度单位。可以把 slot 想成**停车场车位**：车位数量 $N$ 固定（由显存预算决定），但停哪辆车、什么时候进出由调度器动态决定。
+>
+> ### 一个 slot 里"装"了什么
+> 一个被调度进 slot 的请求，引擎要为它维护：
+>
+> | 内容 | 说明 |
+> |---|---|
+> | **KV cache block table** | 该请求在 [[PagedAttention]] block 池里持有的物理 block 列表（逻辑位置→物理位置映射） |
+> | **当前序列位置 pos** | 已生成到第几个 token（决定下一步往 cache 哪个位置写新 K/V） |
+> | **生成状态** | 是否已 EOS、剩余 max_tokens、是否在 prefill/decode 阶段 |
+> | **采样上下文** | top-k/top-p/temperature 等采样参数、上一步生成的 token id |
+>
+> slot 数 $N$ 由显存上限反推：$N \approx \frac{M_{\text{KV budget}}}{\text{平均每请求 KV cache 大小}}$（见 [[KV cache management]] §4.1）。
+>
+> ### 为什么 slot 是 continuous batching 的核心概念
+> - **static batching**：一批 $N$ 个 slot 一次性占满，**slot 被占的请求必须等整批跑完才能释放**——短请求早就生成完了，slot 还空着浪费，新车进不来（"车位被占着不走"）。
+> - **continuous batching**：**每个 iteration（每生成 1 个 token）检查一次**——谁生成完（出 EOS 或到 max_tokens）就立即释放它的 slot，把等待队列里的新请求塞进来（先做 prefill 建 cache，再进 decode）。slot 内容**流动**，但 slot 总数 $N$ 固定。
+>
+> ### 直观类比：停车场
+> | | static batching | continuous batching |
+> |---|---|---|
+> | 车位（slot）数 | 固定 $N$ | 固定 $N$ |
+> | 车什么时候驶出 | 整批一起驶出（等最慢的车） | 任何车跑完立即可驶出 |
+> | 新车什么时候驶入 | 等整批驶出 | 空出车位立即驶入 |
+> | 利用率 | 低（空车位闲置） | 高（车位几乎永远有车） |
+>
+> ### 代码示意（vLLM Scheduler 的核心循环）
+> ```python
+> # N 个 slot 由显存预算决定，每个 slot 绑一个请求 id
+> running: list[ReqState] = []            # 当前占 slot 的请求
+> waiting: list[ReqState] = queue          # 等待 slot 的请求
+>
+> while True:
+>     # 每个 decode iteration 一次调度
+>     for req in list(running):
+>         if req.finished:                # 出 EOS 或到 max_tokens
+>             free_kv_blocks(req)          # 释放该 slot 的 KV cache
+>             running.remove(req)          # slot 空出来
+>     # 有空 slot 且显存够 → 从 waiting 拉新请求进来（先 prefill）
+>     while has_free_slot() and waiting:
+>         new_req = waiting.pop()
+>         alloc_kv_blocks(new_req)         # 给新 slot 分 KV cache
+>         running.append(new_req)
+>     # 一次 step：所有 running 请求一起跑 decode（一个 iteration 出 1 token/请求）
+>     step_decode(running)
+> ```
+>
+> ### 常见误区
+> - ❌ **"slot 就是 batch size"**——不完全对。slot 是 batch 里的**位置/席位**，batch size = 当前被占的 slot 数；continuous batching 下 batch size 在每个 iteration 都可能变（有出有进），但 slot 上限 $N$ 固定。
+> - ❌ **"slot = GPU 流"**——错。slot 是**调度逻辑概念**（"哪个请求在跑"），与 CUDA stream 无关。一个 iteration 里所有 slot 的 decode 是**同一个 CUDA kernel**（batch 维度拼一起）算出来的。
+> - ❌ **"slot 数等于 GPU 数"**——错。一台 GPU 上的 continuous batching 可以有几十上百个 slot（batch=128 很常见），全在一卡上。
+>
+> 关联：[[KV cache management]]（slot 持有 KV cache block table）、[[batching tradeoff]]（slot 数 $N$ 是延迟/吞吐 tradeoff 的旋钮）、§3.3 PagedAttention 与 continuous batching 的捆绑关系。
+
 > [!note] 三句话定位
 > - **是什么**：batch 的"成员"在 token 边界动态进出，slot 数固定但内容流动。
 > - **为什么**：static batching 让短请求空等长请求，GPU 大段时间闲置。
@@ -89,9 +144,55 @@ vLLM 默认策略：按 FIFO（最早进来的先被驱逐）或 LRU。
 
 prefill 阶段算整个 prompt 的 $K/V$，对长 prompt（如 4K–32K token）是 **compute-bound** 的大块计算，会长时间独占 GPU、阻塞 decode。**chunked prefill** 把长 prompt 切成 chunk（如 512 token/chunk），与 decode iteration **交错**执行：
 
-```
-iter:  [prefill_chunk(A,512)] [decode(batch)] [prefill_chunk(A,512)] [decode(batch)] ...
-```
+> [!note] 解答：分块预填（chunked prefill）是怎么"节约时间"的？
+> 关键澄清：**chunked prefill 几乎不减少总计算量**——同一根 prompt，整体 prefill 的 FLOPs 和切块 prefill 的 FLOPs 之和基本相等（切块甚至因多几次 kernel launch 略增）。它"省时间"省的不是**计算时间**，而是**调度时间/等待时间/空闲时间**，本质是把"一大块独占 GPU 的计算"改造成"小块计算 + decode 交错"的**流水线**，让 GPU 不再被长 prefill 长时间独占、让在跑的 decode 请求不被饿死、让新请求更快出首 token。下面拆五条收益来源。
+>
+> ### 收益 1：decode 不被长 prefill 阻塞（消除"饿死"）
+> 这是最核心的一条。一个 4K–32K token 的长 prompt，prefill 是 **compute-bound 的大 GEMM**，要连续占用 GPU 几十到几百毫秒。这期间正在 decode 的请求（continuous batching 里在跑的 slot）**只能干等**——它们的 decode kernel 是 memory-bound 的、本可以与 prefill 在不同 SM 上交错跑，但因为调度器一次只发一个 batch，整段时间 GPU 被一个 prefill 独占，decode 全停。
+> - 切块后：一个 512-token 的 prefill chunk 只占几 ms，**夹在两个 decode iteration 之间**跑完，decode 请求每个 iteration 还能照常出 1 token，TPOT（每 token 延迟）平滑不抖动。
+> - 不切块：decode 的 P99 TPOT 会出现几百 ms 的**尖峰**（被长 prefill 卡住），SLO 容易破。
+>
+> ### 收益 2：首 token 延迟（TTFT）下降——新请求能更快"挤进"运行队列
+> 不切块时，新请求要等**整个 prefill 算完**才能进 decode、出第一个 token；若此时 GPU 正跑别人的长 prefill，新请求还得排队等 GPU 空出来，TTFT 雪上加霜。
+> 切块后，新请求的 prefill 可以**分多次、每次一小块**穿插进当前 decode 流，**第一个 chunk 算完即可开始 decode 出首 token**（部分实现里首 token 甚至在 prefill 未全算完时就能基于已算部分给出，但更常见是 chunk 跑完后调度器把该请求加进 decode batch）。整体 TTFT 显著降低，尤其高并发 + 长 prompt 场景。
+>
+> ### 收益 3：避免 preemption（驱逐）已运行请求——省掉重算/换出开销
+> 没有分块时，长 prompt 的整块 prefill 需要一次性申请一大块显存建 KV cache。若当前显存被 continuous batching 的运行请求占满，调度器只能 **preempt**（驱逐）某些在跑请求——换出 KV 到 CPU 或丢弃重算——为新请求腾地方，被驱逐请求之后要**重算 prefill**，纯浪费。
+> 分块后，KV cache 按 chunk 增量分配，**每个 chunk 只需一小块显存**，调度器可在显存有空隙时塞一个 chunk 进来，不必强行驱逐别人。等于把"一次性大额显存申请"换成"零存整取"，preemption 大幅减少 → 重算开销减少 → 实际"省了时间"。
+>
+> ### 收益 4：kernel 混合让 SM 利用率更均衡
+> - prefill chunk：compute-bound，把算力（FLOPs/s）吃满；
+> - decode：memory-bound，把带宽（Bytes/s）吃满，但算力闲。
+> 两者交错等于**让 GPU 的算力部件和带宽部件交替干活**，SM 占用率与带宽利用率都更平稳，避免"prefill 时带宽闲、decode 时算力闲"的浪费。详见 [[GPU utilization]] §roofline 与 [[memory bottleneck]] §4.5。
+>
+> ### 收益 5：可控制 prefill 速率，适配 decode 的显存增长
+> continuous batching 里每个 decode 请求的 KV cache 每 iteration 长 1 token，显存持续涨。若 prefill 一次占满，运行请求的 cache 可能涨爆显存触发 preempt。chunked prefill 让调度器**每个 iteration 重新评估显存预算**——显存紧就少塞 prefill chunk、多让 decode 跑；显存松就多塞 prefill。这是动态反馈控制，整批更稳。
+>
+> ### 数学直觉：从"串行阻塞"到"交错流水"
+> 设长 prompt 共 $P$ token，单 chunk $c$ token（$P \gg c$），prefill 总耗时 $T_P$（切块后近似不变，略增 $\epsilon$ 开销），decode 单 iteration 耗时 $T_d$。在跑 $B$ 个 decode 请求，每个还要生成 $L_i$ token。
+>
+> **不切块（朴素的 prefill-then-decode）**：新请求到达后，GPU 必须先连续跑完 $T_P$ 的 prefill，期间 $B$ 个 decode 请求全部停滞。它们的"被阻塞时间" = $T_P$。若 $T_P = 300$ ms、$B=64$，相当于**浪费了 $64 \times 300\text{ms} = 19.2$ token·秒 的 decode 产能**。
+>
+> **切块交错**：把 $T_P$ 切成 $P/c$ 段，每段 $\approx T_P \cdot c/P$ 时间，夹在 decode iteration 之间。每个 decode iteration 现在耗时 $T_d + T_P \cdot c/P$（decode + 一个 prefill chunk）。$B$ 个请求全程不被阻塞，损失只有每 iteration 多出的那一小段 prefill 时间，且这段时间在**算新请求的有效 prefill**，不是空转。
+>
+> 总产能对比（单位时间产出的有用 token）：
+>
+> | 模式 | decode 产能损失 | 新请求 prefill 进度 | TTFT |
+> |---|---|---|---|
+> | 不切块 | $B \cdot T_P$ 的 decode 时间被冻 | 集中在某段时间全速 | $T_P$ + 排队 |
+> | 切块 | 接近 0（decode 不停） | 分散穿插，速率受控 | 显著降 |
+>
+> ### 类比
+> 高速公路上一辆超长货车（长 prefill）独占车道，后面所有小车（decode）全堵住等它走完。chunked prefill = 把这辆超长货车拆成一批小货车，**和车流混行**，车道始终满载，小车不被堵死，大件货物也照样按时送达。总货运量（FLOPs）没变，但**通行时间/延迟/利用率**全面好转。
+>
+> ### 常见误区
+> - ❌ **"切块减少了 FLOPs 所以快"**——错。FLOPs 基本不变，甚至略增（多 kernel launch、多一次 block 边界 attention 处理）。省的是**等待与闲置**，不是算力。
+> - ❌ **"切块总能提速"**——不对。chunk 太小 → kernel launch 与调度开销主导，反慢；chunk 太大 → 退化成不切块的阻塞。vLLM 默认 chunk size 经验值 512（可配），需结合模型/带宽/profile 调，见 [[batching tradeoff]] §8.4。
+> - ❌ **"切块只利好 TTFT，不影响吞吐"**——不完全。它通过消除 decode 阻塞、减少 preemption 重算，**间接提升吞吐**（GPU 不空转、不重算）。
+> - ❌ **"切块和 prefix caching 是一回事"**——不是。prefix caching 是**复用已有 KV**（命中即跳过 prefill），chunked prefill 是**KV miss 时把 prefill 切碎交错**。两者正交、可叠加：命中省掉整段 prefill，没命中再用 chunked 切碎，详见 [[prefix caching]] §8.4。
+>
+> 关联：[[KV cache management]] §prefill vs decode 两阶段算力特征、[[batching tradeoff]] §8.4 chunked prefill 的作用、[[GPU utilization]] roofline、[[PD分离]]（另一种解两阶段冲突的方案：物理分离而非交错）、[[prefix caching]]（正交互补）。
+
 
 好处：decode 不被长 prefill 饿死，首 token 延迟（TTFT）与每 token 延迟（TPOT）都更平滑。vLLM、SGLang、TGI 都支持。
 
