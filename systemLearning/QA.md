@@ -209,6 +209,10 @@
 
 - [[FLOPs计算]] — 前向 2 反向 4 怎么得出来的？（矩阵乘 2mn=2N_W 前向每参数 2 FLOP；反向算输入梯度+权重梯度两个 2N_W=4N_W；合计 6ND；直觉=反向算两次乘加是前向 2 倍）
 
+### [[训练显存估计]]
+
+- [[训练显存估计]] — 新建一章节 专门来讲解 训练显存估计 假设训练92b模型 需要多少显存？（**新建型**：训练峰值显存公式 $M \approx 16N + M_{\text{act}}$，Adam+bf16 AMP 训练态 = 权重 $2N$+梯度 $2N$+optimizer state $12N$（fp32 master $4N$ + Adam $m,v$ 各 $4N$）= $16N$；92B → 1472GB 训练态、单卡 80GB OOM 19 倍、DDP 不可行、FSDP/ZeRO-3 分片 $P_{\min}\approx 16N/64 \approx 23$ 卡实测 32-64 卡；加 FA+ckpt 激活 $\approx 21.5$GB、通信临时约 5%；ZeRO-1/2/3 三阶段单卡显存分级表、不同 optimizer state 大小对照、8-bit optimizer/offload 省显存手段、口诀 $P_{\min}\approx N/4$GB；区分训练显存 vs 推理显存(2N+KV) vs $16N$、漏算 master 权重误区、MoE 用总参数算显存）
+
 ---
 
 ## 四、强化学习基础 / RL基本概念
@@ -227,6 +231,14 @@
 
 - [[variance reduction]] — "方差"意味着什么？（**行内型**：方差=梯度估计量 $\hat g$ 的随机波动 $\text{Var}[\hat g]=\text{Var}[X]/N$，非 reward/参数方差；方差大→学习率必须小→训不动；PG 蒙特卡洛天然大方差，variance reduction 全套技巧都在压 $\text{Var}[\hat g]$；含方差来源拆解/偏差-方差 trade-off/GAE 插值。同一问题另现于 [[baseline]] §4.2）
 - [[baseline]] — §4.2 这里的"方差"指什么？（**行内型**：指梯度样本 $\nabla\log\pi\,(G_t-b)$ 的方差；baseline 通过压二阶矩 $\mathbb{E}[X^2]$ 降它、期望项不变故无偏；$b=V^\pi$ 时扣掉状态底色方差降最多，下降量 $\approx\text{Var}[V^\pi]$）
+
+---
+
+## 五、LLM RL（RLHF / RLAIF） / 对齐算法
+
+### [[DAPO]]（新建笔记）
+
+- [[DAPO]] — 增加相关章节 DAPO 在 Timely rollout 上提供 prompt-group 级 dynamic sampling、pre-filter、post-filter、replay 和 refill 语义。是什么意思（**新建型+联网**：DAPO=arXiv:2503.14476 字节 Seed，GRPO+4 trick 治 long-CoT RL 的熵坍塌/梯度消失/长度漂移/奖励噪声；批注那串术语是对 Dynamic Sampling 在 rollout 系统实现语义的工程拆解——timely rollout=采样过滤当场在 rollout 阶段做、prompt-group 级=过滤粒度按"一 prompt+G 条响应"整组判 reward std=0 整组扔、dynamic sampling=采不够动态多采、pre-filter=进训练 batch 前剔除 trivial 组、post-filter=累积阶段对齐切片、replay=不够 continue 重采一轮、refill=补满到 train_batch_size；一句话=rollout 端"当场判、整组过滤、不够重采、补满为止"；4 trick 完整推导/verl 配置/代码循环/误区/与 GRPO/PPO/DPO 对比表；来源 arXiv:2503.14476/verl docs 2025-06/dapo-sia.github.io/swift docs/腾讯云 2026-07-14 核实）
 
 ---
 
@@ -280,9 +292,40 @@
 - [[FP8量化方案]] — fp8 的不同量化方案展开（**新建型**：FP8=E4M3/E5M2 两格式 × per-tensor/per-channel/per-token/per-block(MX)/delayed scaling 缩放策略的组合；训练 TE 默认前向 E4M3+per-tensor delayed、反向 E5M2，推理 vLLM/TRT-LLM 权重 per-channel+激活 per-token+KV E4M3，方案不等价是 [[训推不一致]] 精度路径 TIM 主因；MXFP8 是训推统一希望；TE/vLLM 代码、per-tensor vs per-block 精度推导、6 条误区）
 - [[KV cache management]] — prefill 和 decode 本质都是算 KV，分两阶段只因"token 拿到的时机不同"对吗？（**行内型**：大方向对但只抓到表象——根本原因是自回归生成的**串行因果依赖**使 decode 无法并行（第 t 个 query 要等 t-1 步 argmax 出来才能算），非仅 prompt 提前给；并衍生 compute-bound vs memory-bound 两套截然不同的 kernel(GEMM vs GEMV)/调度/指标体系(TTFT vs TPOT)；prefill 一次性并行填 N 个 K/V 进 cache，decode 每步 append 1 个；两阶段抢资源冲突催生 chunked prefill / PD 分离 / continuous batching 等调度策略）
 
+### [[dynamic batching]]
+
+- [[dynamic batching]] — 为什么要一个batch一起前向？一个请求不能前向吗？（**行内型**：能前向(batch=1)但亏——GPU 是吞吐器件(A100 312T/6912 core)，单请求算力利用率 <10% memory-bound；攒批让"一次访存服务多请求计算"算术强度↑吞吐近线性涨而单次耗时几乎不涨，64 条 batch 比串行快 ~40×；数学：T_fwd(B)≈launch+2NB/P 慢增、throughput=B/T_fwd；反问两答(单请求延迟低但成本最高/double 凑批等待正是 batching tradeoff 由 dynamic 双触发权衡)；单请求合法场景(调试/极敏延迟/小显存/流式 decode)；LLM decode 每步本质 batch=1 故 continuous/speculative/KV量化/kernel融合全在对抗此浪费；一句话=把312T GPU当3T用是浪费）
+- [[dynamic batching]] — 矩阵相乘类比 m 越长算越多显存固定 对吗？（**行内型**：方向对但需修正——更准确是 X(B×d)×W(d×d)=Y(B×d)，W 权重固定(显存固定✓只读一次) B=batch 行数变长 FLOPs=2Bd² 随 B 线性涨 算术强度 I=B 随 B 涨→利用率↑(你抓对的部分)；但"显存固定"只对权重成立，KV cache 随 B 线性涨(每请求独立 cache, batch64 7B@2k ≈32GB)、激活随 B 涨，这是 batch 不能无限大的硬约束 OOM；收益来自权重固定、代价来自 KV cache 不固定=batching tradeoff 两面；修正后=权重矩阵固定被多行摊薄、每行拖随它走的 KV cache）
+
 ### [[continuous batching]]
 
 - [[continuous batching]] — 分块预填是怎么做到节约时间的（**行内型**：核心澄清——chunked prefill 几乎不减 FLOPs，省的是等待/闲置/重算。五条收益：①长 prefill 不再独占 GPU 阻塞 decode（消除饿死与 TPOT 尖峰）②TTFT 降（首 chunk 算完即进 decode）③KV 增量分配免 preemption 重算（零存整取 vs 一次性大额申请）④prefill 算力与 decode 带宽交替吃满 SM/带宽更均衡⑤每 iteration 重新评估显存预算做动态反馈控。数学直觉对比 B·T_P 的 decode 产能冻结 vs 接近0损失。类比超长货车拆小车混行。误区=不减FLOPs/不是总提速/chunk太小反慢/与prefix caching正交非同物）
+
+### [[prefix caching]]
+
+- [[prefix caching]] — 这个技术现在是不是已经很容易实现了？直接调 API 就行？训推框架开发人员感知吗？（**行内型+联网**：三层回答——①API 用户近乎零成本白嫖(OpenAI 全自动 90% off 无 knob/GPT-5.5+ 默认 24h 扩展/Anthropic 显式 `cache_control` 90% off 但写费 1.25×/Gemini 90% off 但有存储租金/DeepSeek V4 Flash 98% off 最狠)；2026-07 价格表+5 条坑(静态前→变量后/低于阈值静默不缓存/Gemini 闲置计费/Batch 可叠加 95% off/健康命中率 60-90%)) ②自建推理一行开关即有(vLLM `--enable-prefix-caching` block 对齐有粒度损失/SGLang RadixAttention 默认零配置无对齐损失/TRT-LLM 内置；2026 vLLM+SGLang 唯二重要生产引擎) ③框架开发人员必须深度感知(推理引擎当核心 KPI+护城河,SGLang RadixAttention 快 vLLM 3-5× prefill+29% 吞吐,RadixArk 分拆融 $400M;训练框架靠它提 rollout 吞吐但须 weight sync 失效缓存治 staleness+TIM 对齐 KV 量化；在线学习权重新鲜度与复用冲突需版本化缓存)。一句话=容易实现对使用者,对开发者仍是性能与一致性硬仗。来源 vLLM docs/turion.ai 2026/inference.net 2026/leanlm.ai/bytecosts/aicost.ai 2026-07-12 核实)
+- [[prefix caching]] — 我记得我的项目一打开很容易把显存打爆（**行内型**：prefix caching 本身几乎不额外占显存(指针复用物理 block,引用计数+1),真凶是四条——①KV cache 预分配过头(vLLM `--gpu-memory-utilization` 默认 0.9 顶太高,启动瞬间 90% 显存没了,forward 要 activation 直接 OOM)②模型权重本身大(70B bf16 140GB 单卡装不下须 TP)③多实例/多进程抢卡④CUDA context+临时张量没留余量；prefix caching 间接影响只在命中率低冷前缀堆积/weight sync 未失效旧 KV 残留/block_size 太小碎片；治法=util 降到 0.85-0.88+大模型 TP+`--swap-space` 兜底+监控命中率；附 vLLM 70B TP4 启动配方）
+
+### [[PD分离]]
+
+- [[PD分离]] — 为什么要把 gpu 叫做实例？（**行内型**：实例=一个独立运行的推理服务进程/部署单元=逻辑调度单位≠物理 GPU 硬件单位；一个实例可挂 1 卡(TP=1)也可挂多卡(TP=8)；叫实例因①逻辑服务单元与硬件解耦②路由/扩缩容/版本管理对象是实例非卡③云原生 borrow(K8s pod/EC2 instance)④weight sync 按实例 TP>1 时歧义；附 物理层/实例层/池层/路由层四层图 + instance/worker/pod/replica 术语对齐表；vLLM/SGLang 文档 worker/instance 混用都指推理服务单元,硬件语境才叫 GPU/device）
+- [[PD分离]] — 这两个比例一样吗？1 个 node 8 卡 prefill 8 卡 decode 会不会 P 阻塞 D？（**行内型**：三答——①§3.4/§4 的 P:D 比例是同一个概念(都是 P 池与 D 池资源配比),非两套,§2 末尾只描述两池配置方向未给数；②1:1 是中性起点,合不合理看流量画像(偏生成→1:2~1:5 D 多/偏 prompt→2:1~3:1 P 多/均衡→1:1 起步动态调/长 context→池化优先比例次要),工业经验常见 1:2~1:5；8P8D 同 node 机内 NVLink 迁移快是甜点拓扑但比例要监控队列动态调；③分离架构核心目的就是消除 P 阻塞 D(P/D 不同实例不同 batch,decode TBT 稳),但冒出新问题=KV cache 迁移延迟(D 等 cache 到位非 P 阻塞 D)/D 池饱和排队(D 自己过载)/P 池饱和拖整体/跨机带宽瓶颈(规模化痛点催生池化)；监控别误判 P 阻塞 D 而错优化）
+
+### [[GPU utilization]]
+
+- [[GPU utilization]] — gpu-memory-utilization 为何设 0.8/0.9 不设 1.0？要留给谁？（**行内型**：vLLM `--gpu-memory-utilization` 指 KV cache 池占比非算力利用率；不设 1.0 是留运行时临时开销——CUDA context+allocator 元数据 300-600MB、forward 激活(prefill 长序列峰值高)、cuBLAS/FlashAttention workspace、临时张量/logits($B×V$ 对大词表可观)、speculative draft、其他进程、峰值尖刺；util=1.0 启动没事一跑长 prompt/大 batch 立刻 OOM；推荐值表 独占 0.90/大模型 TP 0.85-0.88/长 context 0.80-0.85/混部 0.80）
+- [[GPU utilization]] — 为什么推理 OOM 反而要降低 gpu 利用率？（**行内型**：KV 池是启动时一次性预分配刚性大块,util 越高池越大把地占死,forward 要激活/workspace 抢不到→OOM；降 util=主动缩 KV 池给运行时临时腾地方,代价是并发数/max context/吞吐↓；本质是显存预算重分配=少给 KV 喂吞吐、多给临时喂不崩,属 batching tradeoff 显存维；排错顺序=先查权重太大该上 TP 没/同卡多实例/context 峰值/`--swap-space` 都治完还 OOM 再降 util）
+
+## 八、推理系统 / 高级推理技术
+
+### [[beam search]]
+
+- [[beam search]] — beam search 用在哪？什么是序列解码 decoding？这是在加速 decoding 吗？（**行内型**：①用在序列生成质量优先场景——NMT/摘要/image captioning/ASR/结构化输出(SQL/代码),LLM 时代对话创作被 sampling 取代退守窄场景；②序列解码=从模型每步输出分布里挑 token 拼序列的后处理,argmax 贪心/sampling/beam/speculative 是不同 decoding 策略,同模型同权重不同策略产出不同输出；③**不是加速反而慢 B 倍**——beam 每步算 B 条候选剪枝是拿时间换质量近似全局最优,加速的是 speculative decoding(一次 forward 多 token 保分布无损),二者正交 beam 是搜索提质 spec 是采样加速；防混口诀"beam=慢但更准的搜索,speculative=快且无损的加速"）
+
+### [[speculative decoding]]
+
+- [[speculative decoding]] — 联网搜索该领域新进展 verl-speco/eagle/medusa 等（**行内型+联网**：2024-2026 演进主线=独立 draft→轻量 head→预测 feature→动态树+训练时对齐。方法家族表(vanilla 2-2.8× / Medusa K 并行头 1.8-2.5× 正被取代 / EAGLE-1 预测 hidden state 2.5-3× / EAGLE-2 动态树 3-3.5× / EAGLE-3 改回 token+多层 hidden 聚合+training-time test 3.5-4×(13B 5.6×) 2026 生产默认 / EAGLE-3.1 vLLM+TorchSpec 协作 2026-05 / NanoSpec 动态词表裁剪 40× 再省 51.6%)；另有 n-gram 零成本首试/self-speculation 跳层/streaming 重叠/MTP(DeepSeek V3/Llama4 原生)/Suffix+LSTM。2026 生产选型=新部署直接 EAGLE-3(预训练 head 拿来即用/vLLM 一行 --speculative-config/几乎零额外 VRAM/接受率最高),决策树 n-gram→EAGLE→draft model→Medusa。框架表(vLLM EAGLE-3/3.1 主推/SGLang/TensorRT-LLM Dynamic Tree+SA/HF/llama.cpp)。**RL rollout 新热点**(用户特别问)：verl PR#5925 EAGLE-3 加速 rollout ~15% 关键坑=weight sync 后重载 draft+重建 RoPE cache；**verl-SpeCo**(verl-speco,2026-06 pre-release)=co-training framework 训练时协同更新 draft 保持 policy 演化对齐；Decoupled Speculation(arXiv:2511.16193) draft/verify 异步流水线 verl issue#5559；MTP 训推一体 PR#6432；Speculator 训练框架 PR#4947。与训推一致性交汇=draft 须随 θ 对齐否则 acceptance 崩+logp 污染 TIM；无损性边界=经典无损但 draft 冻结+target 演化破坏保证。来源 EAGLE-3 arXiv:2503.01840/vLLM blog 2026-05/verl-SpeCo GitHub/verl PR#5925#5559#4947/NanoSpec arXiv:2605.26444/localaimaster/inference.net/vizuara 2026-07-12 核实）
+- [[speculative decoding]] — 细说 EAGLE-3：什么是 target / 什么是轻量 draft head / 什么是 hidden state / 为什么一次能验证多分支（**行内型+联网**：四问四答。①target=被加速的大模型本身(Llama-3.1-8B/70B),最终裁判+给 draft 喂 hidden state,输出分布严格=p 保证无损;vanilla 的 target 配独立小模型,EAGLE 的 target 配自家上的轻量 head 一体。②轻量 draft head=target 上挂的 1 层 Llama decoder+FC 投影+小 LM head,num_hidden_layers=1,checkpoint ~1.2GB(vs 8B target ~16GB,1/13),复用 target hidden state 作输入,词表缩小到 32k,预训练 head 拿来即用;轻量因只1层/参数几十之一/复用target/小词表。③hidden state=transformer 每层 forward 后每位置产出的连续向量(hidden_size 维),是内部表示;EAGLE-1 只用顶层 feature(只承载下token信息),EAGLE-3 抓 target 早/中/晚3层(如{2,N//2,N-3})hidden concat 3k 维→FC→k 维 g 融合低中高语义+training-time test 训练时模拟多步自回归喂 draft 输出 a 当下一步输入抗误差累积;连续平滑好预测=EAGLE 接受率 70-80% vs vanilla 50% 的根因。④一次验多分支=tree attention mask:整棵候选树 token 拼成一条序列一次 forward,mask[u,v]=0 当且仅当 v 是 u 的祖先(含自身)否则 -inf,每 token 只看自己祖先链不跨分支泄漏,等价于各自正确上下文,transformer 一次矩阵乘并行算出所有分支位置 logits 再接受-拒绝挑最长前缀;含可跑的 8 节点树 mask 构造代码。tree decoding 取舍:低并发最快但高 QPS 时验证 64 候选只为多接受1-2 token 不划算,vLLM 默认 greedy/TRT-LLM 用 dynamic tree 权衡。来源 arXiv:2503.01840§3.1/vLLM speculators eagle3 docs/HF thoughtworks GLM-4.7 config/Red Hat 2025-07/EAGLE-Pangu arXiv:2603.08088§2.4/TRT-LLM PR#12062 2026-07-12 核实）
 
 ---
 
@@ -291,6 +334,36 @@
 ### [[常见指标]] / [[RLHF训练监控指标详解]]
 
 - [[RLHF训练监控指标详解]] — 这些都是什么指标 详细展开 补充完整 新起一个md（critic/rewards/mean、actor/pg_loss、actor/grad_norm、actor/kl_loss、response_length/mean、actor/pg_clipfrac、actor/ppo_kl、critic/advantages/mean、training/rollout_actor_probs_pearson_corr）（**新建型**：逐条拆"是什么/怎么算/看什么/坏了说明什么"；PPO总目标公式+GAE+Pearson推导；verl风格最小复现代码；三KL区分表(ppo_kl/kl_loss/kl_ref)；健康绿区参考表+调参联动决策表；与异步staleness治理对应；另附verl/OpenRLHF/TRL命名对照）
+
+---
+
+## 九、Ray / 分布式调度 / 工程问题
+
+### [[placement group]]
+
+- [[placement group]] — 如何避免 pg 造成碎片 比如两个 actor 各占 4 卡结果各自占了一个完整的 8 卡 node（**行内型**：根因是 SPREAD/默认分散 + 两个独立 actor 各 first-fit，调度器看不到它俩关系；碎片率公式 $\eta=\sum\text{已用}/\sum\text{节点}$，你那 50% 空着；解法=一个 PG 含 2 个 4-GPU bundle + STRICT_PACK 强制同节点装箱 4+4=8 填满；verl 实证 `RayWorkerGroup` 默认 `bin_pack=True`→`STRICT_PACK` 把同 pool worker 装箱；五条工程经验表；4 条误区含"PG 也可能造碎片""调度器不会自动凑满"）
+
+### [[Ray与分布式调度]]
+
+- [[Ray与分布式调度]] — 各个 actor 之间怎么传递信息？需要传递信息吗？主控是怎么控制各个 actor 的？（**行内型**：两条正交通道——张量数据走 NCCL 集体通信、控制信号/小对象走 Ray Object Store；需要传，RLHF 多角色流水线每步都跨 actor 交数据；主控=single-controller 模式，driver 进程持 RayWorkerGroup handle，靠 `actor.method.remote(args)` + `ray.get()` 编排时序，actor 内部各自起 torch.distributed 组做张量同步；verl RayWorkerGroup.execute_all_async/_execute_remote_single_worker 代码实证；MASTER_ADDR/PORT 由 driver 通过 env_vars 注入 actor）
+- [[Ray与分布式调度]] — 这里能展开讲讲吗 verl 的代码在 ray_trainer.py（**行内型**：逐段拆 verl RayPPOTrainer——`__init__` driver 不持卡只存 role_worker_mapping/resource_pool_manager 等元数据；`init_workers()` 四步建 actor=资源池→RayClassWithInitArgs→create_colocated_worker_cls 多 role 塞同进程省显存→spawn 拆逻辑 wg；`fit()` 主循环 rollout→sleep_replicas→reward→old_log_prob→ref_log_prob→values→adv(本地)→update_critic→update_actor→save_ckpt→update_weights(weight sync)，driver 只 `.remote().get()` RPC 编排重活全在 actor；5 条关键观察 + 代码行号）
+
+### [[Ray调试手段]]（新建笔记）
+
+- [[Ray调试手段]] — 调试手段新建一章节吧 可以联网 ray debugger？（**新建型**：五层工具链——①Ray Dashboard(`8265` Web UI，Overview/Cluster/Jobs/Logs/Metrics/Events/Serve view) ②Ray Distributed Debugger(2026-04 GA VSCode 扩展，跨 actor 交互式断点 attach) ③ray timeline(Chrome tracing/Perfetto 看调度排队/搬运/exec 时序) ④ray list state APIs(`ray list actors/tasks/nodes/cluster-events` CLI) ⑤代码级 `ray.get(timeout)` + RayTaskError/GetTimeoutError 异常；调度延迟公式各项对应工具；verl RLHF 调试 5 步流程；与 torch profiler/nsys 四层分工表；8 条误区；来源 Anyscale blog 2026-04/05、Ray docs 2.55/2.56）
+
+### [[actor deadlock]]
+
+- [[actor deadlock]] — 细说一下规避方法（**行内型**：六种规避——①避免循环依赖/无环 DAG ②single-controller 主控编排消除多主控互等 ③async actor `max_concurrency>1` 线程池并发破死锁 ④不要嵌套 `ray.get`/future 直接传递不阻塞 ⑤`ray.get(timeout)` + 超时熔断 ⑥callback/continuation `.continue_with` 不等返回 ⑦watchdog 周期性健康探测自愈；每条含机制/代码/适用场景/RLHF 落点；优先级口诀"无环>单主控>异步>非阻塞>超时>回调>看门狗"）
+- [[actor deadlock]] — `max_concurrency` 是什么意思？（**行内型**：Ray actor 并发度参数，决定同一 actor 同时能跑几个方法调用；默认 1 串行保证状态一致但易死锁/低吞吐；设 N 配 N 线程池并发执行，循环等待被打破不死锁但并发改状态须自己加锁、一致性责任从 Ray 转开发者；取值表（训练 actor 1/推理 10-100/编排 1/需响应回调 >1）；更优解是 asyncio actor 协程并发不阻塞又不数据竞争；RLHF 推理常调大训练保默认，verl single-controller 无环设计使大多数 actor 不需调大）
+
+---
+
+## 十、性能分析与系统优化 / GPU性能
+
+### [[memory bandwidth]]
+
+- [[memory bandwidth]] — 联网查询一下 HBM 规格表正确性（**行内型+联网**：原表四行(V100 900/A100 2039/H100 3350/H200 4800)全部正确，来源 NVIDIA 官方 datasheet；订正=A100 应区分 40GB(1555 GB/s)/80GB(2039 GB/s)；2025 新增 Blackwell 应补入——B200 192GB HBM3e 8.0TB/s、B300 288GB HBM3e 8.0TB/s、NVLink 1.8TB/s；2026-07-12 核实；带宽墙从 A100 2039→B200 8000 GB/s，7B decode 理论上限 145→571 tokens/s 但仍 memory-bound 因算术强度 I=2 不变）
 
 ---
 

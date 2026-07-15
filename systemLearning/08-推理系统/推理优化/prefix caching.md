@@ -9,12 +9,100 @@
 ## 1. 一句话定义
 
 **prefix caching（前缀缓存）** 是 LLM 推理引擎复用**多个请求公共前缀**的 [[KV cache management]] 的技术：当多个请求共享相同的开头（system prompt、few-shot 示例、文档前缀等），只对第一个请求算这部分前缀的 KV 并存入缓存，后续请求直接复用这部分 KV、只 prefill **各自不同的后缀**。vLLM 称 Automatic Prefix Caching (APC)，SGLang 用 radix tree（基数树）组织共享前缀，OpenAI API 称 prompt caching。
-
+> [!note] 解答：这个技术现在是不是已经很容易实现了？直接调 API 就行？训推框架开发人员感知吗？
+> 三个问题分别答，结论先行：**API 用户 = 几乎零成本白嫖；自建推理服务 = 一行参数即开；训推/推理框架开发人员 = 必须深度感知，是核心 KPI**。下面是 2026 年 7 月联网核实的情况。
+>
+> ### 一、"容易实现吗"——是的，已从研究特性沉淀为工业默认能力
+> - **vLLM**：APC（Automatic Prefix Caching）基于 PagedAttention block 哈希，一行 `--enable-prefix-caching` 开关即启用，命中按 block 粒度复用物理 KV block（来源：docs.vllm.ai/en/latest/features/automatic_prefix_caching）。注意它要求**逐 token 完全相同**且按 block 边界对齐——共享前缀 3047 token、block_size=16 时，末尾 13 token 每个 block 都要重算，这是 PagedAttention 的固有粒度损失（来源：turion.ai 2026 对比）。
+> - **SGLang**：RadixAttention 是**默认且零配置**的——用 radix tree 在 token 级自动发现任意公共前缀，没有 block 对齐损失，"系统从真实流量里自己学要缓存什么"（来源：inference.net 2026 完整指南；SGLang v0.5.8 2026-01 发布，已在 xAI/NVIDIA/AMD/LinkedIn 等 40 万+ GPU 上生产）。
+> - **TensorRT-LLM**：NVIDIA 自家推理栈也内置 prefix caching，主打原始吞吐天花板（来源：turion.ai 2026）。
+> - **学术界/工业共识**：2026 年 vLLM 与 SGLang 是"唯二重要的生产推理引擎"，prefix caching 已不是卖点而是入场券（来源：turion.ai "vLLM vs SGLang: Inference Engine Comparison 2026"、spheron 2026-06、techsy 2026-03 H100 benchmark）。Triton+TGI 已退场或被吸收。
+>
+> 所以"实现"本身已不构成门槛——开个开关就有。难点从"能不能做"转移到"**命中率够不够高**"和"**调度够不够聪明**"，这才是 2026 年的工程焦点。
+>
+> ### 二、"直接调 API 就行"——分两种用户
+> **A. 闭源 API 用户（OpenAI / Anthropic / Gemini / DeepSeek / xAI）**：确实**几乎零代码改动**就能享受，但各家机制不同（2026-07 数据，来源：leanlm.ai、swfte.com、bytecosts.com、aicost.ai）：
+>
+> | Provider | 激活方式 | 写入费 | 读取折扣 | 最低 token | TTL | 备注 |
+> |---|---|---|---|---|---|---|
+> | **OpenAI** (GPT-5.x) | **全自动**，无 knob | 无 | **90% off**（GPT-5.5: $5→$0.5/M） | 1024 tok | ~5–10min，gpt-5.5+ 默认 24h 免费扩展 | 最省心，看 `prompt_tokens_details.cached_tokens` 字段 |
+> | **Anthropic** (Claude) | 显式 `cache_control` 或 2026 新增自动模式 | **1.25× (5min) / 2× (1hr)** | **90% off** (0.1× input) | 512–4096 (model-dependent) | 5min 默认/1hr 加价/读刷新 | 写入有溢价，但一次写≈1.3 次读即回本 |
+> | **Gemini** (2.5+) | 隐式自动 + 显式 `cached_content` API | 无写费，但有**存储租金** | **90% off** (uniform 10% of input) | 2048+ (2.5 系列) | 隐式不可控/显式默认 1h 可配 | 闲置也计费，低频流量慎用 |
+> | **DeepSeek** (V4 Flash) | 自动磁盘级缓存 | 无 | **~98% off**（$0.14→$0.0028/M，业界最狠） | — | — | 把 hit/miss 直接分开计价 |
+> | **xAI (Grok)** | 自动前缀缓存 | 无 | ~75% off | — | — | 无 API knob |
+>
+> **关键提醒**（这些是"调 API 也得懂"的点，否则钱白花）：
+> 1. **必须把静态内容放最前、变量放最后**——所有 provider 都是 exact-prefix 匹配，一个 token 不同就 miss。在 cached 区域里塞时间戳/随机 ID 是最常见的"缓存失效自残"。
+> 2. **低于最低 token 阈值静默不缓存**——Anthropic 低于 1024 时 `cache_creation_input_tokens` 返回 0、按原价计费，**不报错**，是新手最大坑。
+> 3. **Gemini 显式缓存有存储租金**（$1/MTok/hr Flash，$4.5 Pro），闲置过夜可能比省的还贵。
+> 4. **可与 Batch API 折扣叠加**——Anthropic 明确声明叠加：Sonnet 4.6 batch + cache read = $3×0.5×0.1 = **$0.15/M，95% off**。
+> 5. 健康生产应用的命中率应到 **60–90%**，低于 30% 基本都是 prompt drift。
+>
+> **B. 自建推理服务用户（vLLM/SGLang 自部署）**：不是"调 API"，而是**自己当 provider**——开 `--enable-prefix-caching`（vLLM）或默认即有（SGLang），然后**自己设计 prompt 结构**让前缀命中率最大化，并监控命中率调 LRU/cache 显存预算。本质和你调闭源 API 面对的优化问题一样，只是 KV 在你显存里、省钱=省你自己的 GPU。
+>
+> ### 三、"训推框架开发人员感知吗"——必须深度感知，分三类角色
+> 1. **纯推理引擎开发（vLLM/SGLang/TRT-LLM）**：这是**核心 KPI 与差异化卖点**。SGLang 靠 RadixAttention 在 prefix-heavy 场景比 vLLM 快 3–5× prefill、29% 吞吐，是它能在 2026 抢下 xAI/NVIDIA/LinkedIn 40 万 GPU 的根因；vLLM 的 APC 也是发布说明里的头牌特性。2026 年 RadixArk 从 SGLang 分拆独立融到 $400M，机构资本押注的就是"前缀缓存这块"。开发人员不光要实现，还要调 block_size、LRU、copy-on-write、与 chunked prefill/continuous batching 的调度协同。
+> 2. **训练框架开发（Megatron-LM/DeepSpeed/FSDP/verl/OpenRLHF）**：RLHF/PPO 里 rollout worker 跑的就是推理栈，rollout 采样的 system prompt + prompt template 固定，prefix caching 直接拉高 [[sampling throughput]]，是 RLHF 训练加速的关键一环。verl/OpenRLHF 默认把 vLLM/SGLang 当 rollout 引擎，prefix caching 自动继承。开发人员要感知两件事：① **权重更新必须失效缓存**（[[weight sync mechanism]] 推新 $\theta$，旧 KV 与新 $\theta$ 不匹配，[[stale policy problem]] 在推理侧投影），生产系统要给缓存打版本号切换即清空；② 在 [[训推不一致]] TIM 治理里，KV 量化方案变化会让缓存与训练端 logp 不一致，需对齐。
+> 3. **训推一体化/在线学习系统**：权重持续在变，prefix caching 的"复用"与"权重新鲜度"直接冲突——要么版本化缓存按 $\theta$ 隔离，要么干脆在热路径禁用、只在冷用户/冷版本上开。这是 [[policy deployment (PD)]] 服务降本与一致性的核心权衡点，开发人员必须显式处理。
+>
+> ### 四、一句话总结
+> - **应用层调 API**：技术已"白嫖级"成熟，OpenAI 全自动无脑省 90%，Anthropic/Gemini 加一行 `cache_control`/建 cache object；但 prompt 结构设计（静态前→变量后）和命中率监控仍是用户侧责任。
+> - **自建推理**：vLLM 开个 flag、SGLang 默认即有，但命中率、调度协同、版本失效是工程重点。
+> - **框架开发人员**：推理引擎把它当核心卖点和性能护城河（SGLang RadixAttention 是 2026 头牌）；训练/RL 框架把它当 rollout 加速 + weight sync 失效治理 + TIM 对齐的必经关卡。**"容易实现"是对使用者的，对开发者它依然是性能与一致性的硬仗**。
+>
+> **来源**（2026-07-12 联网核实）：
+> - [vLLM Automatic Prefix Caching 官方文档](https://docs.vllm.ai/en/latest/features/automatic_prefix_caching.html)
+> - [vLLM vs SGLang: Inference Engine Comparison 2026 — TURION.AI](https://turion.ai/blog/vllm-vs-sglang-inference-comparison-2026/)
+> - [SGLang Complete Guide — Inference.net 2026-01](https://inference.net/content/sglang-complete-guide/)
+> - [Prompt Caching in 2026: OpenAI vs Claude vs Gemini Pricing — leanlm.ai](https://leanlm.ai/blog/prompt-caching)
+> - [Prompt caching explained 2026 — llmtest.io](https://llmtest.io/blog/prompt-caching-explained)
+> - [How the Major LLM Providers Price Prompt Caching — ByteCosts](https://bytecosts.com/blog/how-llm-providers-price-prompt-caching/)
+> - [vLLM vs SGLang 2026: H100 Benchmarks — TECHSY](https://techsy.io/en/blog/vllm-vs-sglang) / [Spheron 2026-06](https://www.spheron.network/blog/vllm-vs-sglang-2026/)
 > [!note] 三句话定位
 > - **是什么**：把"公共前缀的 KV"当成可跨请求复用的资源，避免重复 prefill。
 > - **为什么**：system prompt 动辄 1K–8K token，每个请求都重算 prefill 是巨大浪费。
 > - **怎么做**：按 token 序列哈希/前缀树定位已缓存的公共前缀 KV，复用其 block，只 prefill 增量后缀。
 
+
+> [!note] 解答：项目一打开就把显存打爆——和 prefix caching 什么关系？
+> 你这个体感很真实，但**多半不是 prefix caching 本身把显存打爆的**，而是 KV cache 显存预算 + 模型权重 + CUDA context 三件事叠在一起，prefix caching 只是让"已分配的 KV block 被多请求共享"，复用是指针级、零拷贝，几乎不额外占显存。下面把"启动即 OOM"拆开讲透。
+>
+> ### 一、先厘清：prefix caching 占不占额外显存？
+> **几乎不占**。它的机制是让多个请求的 block table 前几项**指向同一物理 block**（见 §3.5），物理 block 还是住在 KV cache 的显存预算里，只是引用计数 +1。所以 prefix caching 本身**不是显存爆的元凶**——它反而通过共享**降低**单请求等效 KV 占用（同样显存能塞更多并发）。
+>
+> 真正吃显存的是下面这几块，**"一打开就爆"基本都中其中一条**：
+>
+> ### 二、显存爆的四大真凶（按 vLLM/SGLang 启动场景排）
+>
+> | # | 真凶 | 机制 | 怎么爆的 | 怎么治 |
+> |---|---|---|---|---|
+> | 1 | **KV cache 预分配过头** | vLLM `--gpu-memory-utilization`（默认 **0.9**）/SGLang `--mem-fraction-static`（默认 **0.9**）会在启动时把 90% 显存预算全划给 KV cache | 留给"权重+activation+临时张量+CUDA context"只剩 10%，稍微一跑就 OOM | 降到 **0.85~0.88**，给 PyTorch CUDA context（~1–2GB）和激活/临时张量留余量 |
+> | 2 | **模型权重本身就大** | 权重显存 = 参数量 × bytes/dtype。70B bf16 = 140GB，单 80GB 卡装不下，必须 TP | 想单卡跑 70B → 直接 OOM；或 TP 切分后 KV cache 预算又挤压 | 大模型上 TP/PP，别想单卡；或上量化（[[FP8量化方案]]/AWQ/INT4）把权重压到 1/2~1/4 |
+> | 3 | **多实例/多进程共存抢显存** | 同一张卡上既跑训练又跑 vLLM，或起多个 vLLM 进程 | 每个进程都按 `gpu_memory_utilization` 抢，叠加爆卡 | 用 `CUDA_VISIBLE_DEVICES` 隔离，一进程一卡；或显式设每个进程的 util 上限（如 0.4） |
+> | 4 | **CUDA context + 临时张量被忽略** | PyTorch 初始化、cuBLAS/cuDNN workspace、forward 的 activation 都要显存，预算时没算进去 | KV cache 预算卡死 0.9，跑起来 activation 没地方放 → 严重 OOM crash | 留 10–15% headroom；监控 `nvidia-smi` 看实际占用 vs 预留 |
+>
+> ### 三、为什么"一打开"就爆（而不是跑一会才爆）
+> 因为 vLLM/SGLang 启动时**一次性预分配 KV cache pool**（PagedAttention 的物理 block 池），按 `mem-fraction-static` 把显存吃满到预算上限。如果你设 0.9，启动瞬间 90% 显存就没了，紧接着 forward 一步要 activation → 直接 OOM。这是"一打开就爆"的典型时序。
+>
+> ### 四、prefix caching 在这里的间接作用
+> 1. **命中率低时冷前缀堆积**：prefix cache 按 LRU 驱逐，但如果你流量很分散（每个请求前缀都不同），缓存里堆了一堆冷前缀 block 占着显存，挤压新请求可用 block → 等效显存变小。治法：监控命中率，低于 30% 就关掉 prefix caching 或缩小 cache 预算。
+> 2. **版本未失效的旧权重 KV 残留**：[[weight sync mechanism]] 推新 $\theta$ 后如果没清缓存，旧版本 KV 还占着显存，新版又来分配 → 叠加爆。治法：权重切换时强制清 prefix cache。
+> 3. **block_size 太小**：block 越小，哈希表 + 元数据开销越大，碎片多，等效可用显存缩水。vLLM 默认 16 是权衡点，别瞎调小。
+>
+> ### 五、一份"启动不爆"的 vLLM 配方
+> ```bash
+> # 关键参数（按 80GB A100/H100、70B 模型 TP=4 举例）
+> python -m vllm.entrypoints.openai.api_server \
+>   --model meta-llama/Llama-3-70B-Instruct \
+>   --tensor-parallel-size 4 \                  # 大模型必上 TP
+>   --gpu-memory-utilization 0.88 \             # 别顶 0.9，留 12% 给 context+activation
+>   --max-model-len 8192 \                      # 限最大上下文，控 KV cache 上限
+>   --enable-prefix-caching \                   # 开 prefix caching 省前缀 prefill
+>   --swap-space 4                              # KV cache 换出 CPU 的 GiB，OOM 时兜底
+> # 监控：nvidia-smi -l 1 看显存曲线；vLLM /metrics 看 cache_hit_rate、num_preemption
+> ```
+>
+> **一句话**：你项目"一打开就爆"的真凶是 `gpu_memory_utilization` 顶太高 + 权重/激活没留余量，prefix caching 反而是帮你省显存的那个。把 util 降到 0.85–0.88、大模型上 TP、监控命中率，三条做完基本就不爆了。详见 [[KV cache management]] §1 显存公式与预算推导。
 
 ## 2. 为什么需要它（动机与背景）
 

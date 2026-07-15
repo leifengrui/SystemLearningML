@@ -15,6 +15,71 @@
 > - **为什么**：普通调度无法表达"这组 actor 要同节点"或"要分散不同节点"；PG 把放置约束变一等公民。
 > - **典型用途**：RLHF 的 Learner+PolicyServer colocate（省权重同步）、tensor parallel 各 rank 同节点（用 NVLink）、容错分散。
 
+> [!note] 解答：如何避免 PG 造成碎片（两 actor 各 4 卡却各占一个 8 卡节点）
+> **先诊断你这个场景的根因**：两个 4-GPU actor 被放到了**两个不同节点**，每节点只用 4 卡、空 4 卡——这是典型的 **bin-packing 碎片**。根因不是 PG 本身，而是**策略选错了 + bundle 粒度没设计好**：你大概率用了 `SPREAD`（或默认调度把两个独立 actor 各自 first-fit 到不同节点），调度器"尊重"了分散意图，结果每节点剩半截没人能凑上。
+>
+> ### 一、碎片是怎么产生的
+> 设集群有 $N$ 个节点，每节点 $G=8$ GPU。两个 actor 各要 4 GPU。
+>
+> | 放法 | 占用节点 | 每节点用 | 总利用率 $\eta$ | 碎片率 $1-\eta$ |
+> |---|---|---|---|---|
+> | 分散两节点（你遇到的） | 2 | 4/8 | $\frac{2\times4}{2\times8}=50\%$ | **50%** |
+> | 装箱同节点（应做的） | 1 | 8/8 | $\frac{8}{1\times8}=100\%$ | 0% |
+>
+> 利用率 $\eta=\frac{\sum \text{已用 GPU}}{\sum \text{节点 GPU}}$，碎片率 $=1-\eta$。你那 50% 空着，就是因为调度器把两个本可凑满一个节点的 actor 拆开放了。
+>
+> ### 二、根因：策略选错 + bundle 粒度错
+> 1. **用了 SPREAD/默认分散**：SPREAD 的语义就是"尽量不同节点"，4+4 自然各占一节点。但你这两个 actor **本该 colocate**（一起放省通信 / 一起填满节点），不该用 SPREAD。
+> 2. **没用 PG / 用了两个独立 actor**：两个独立的 `@ray.remote(num_gpus=4)` actor 各自 first-fit，调度器看不到它俩的关系，谁先有空就放谁，极易分散。
+> 3. **bundle 粒度 = 单 actor 需求**：建了含 2 个 `{GPU:4}` bundle 的 PG，但策略是 SPREAD → 必然分散。
+>
+> ### 三、解法：PACK/STRICT_PACK + 一个 PG 把它们装箱
+> **核心思路**：把两个 actor 建成**同一个 PG 的两个 bundle**，策略用 `PACK`（尽量塞同节点）或 `STRICT_PACK`（必须同节点），让调度器一次性把它们装箱到同一节点：
+>
+> ```python
+> import ray
+> from ray.util.placement_group import placement_group
+>
+> # 关键：一个 PG 含 2 个 4-GPU bundle，策略 STRICT_PACK → 强制同节点
+> pg = placement_group(
+>     [{"GPU": 4, "CPU": 8} for _ in range(2)],   # 2 bundle × 4 GPU = 8 GPU
+>     strategy="STRICT_PACK"                       # 必须全塞同一 8-GPU 节点
+> )
+> ray.get(pg.ready())                              # 等装箱完成，做不到则 PG 创建失败
+>
+> # 两个 actor 各绑一个 bundle，物理同节点
+> a0 = MyActor.options(placement_group=pg, placement_group_bundle_index=0).remote()
+> a1 = MyActor.options(placement_group=pg, placement_group_bundle_index=1).remote()
+> ```
+> - **STRICT_PACK** 保证两个 bundle 全在同节点 → 4+4=8 正好填满 8 卡节点，0 碎片；
+> - 若用 **PACK**（非 strict），调度器"尽量"同节点，塞不下才溢出——若集群只剩一个 8 卡节点能放下就同节点，否则可能分散。要 100% 保证同节点用 STRICT_PACK。
+>
+> ### 四、verl 怎么避免这种碎片（实证）
+> verl 的 `RayWorkerGroup._init_with_resource_pool`（`single_controller/ray/base.py` L552-555）默认就是装箱：
+> ```python
+> strategy = "PACK"
+> if bin_pack:                 # RayWorkerGroup 默认 bin_pack=True
+>     strategy = "STRICT_PACK"
+> pgs = resource_pool.get_placement_groups(strategy=strategy, ...)
+> ```
+> 即 verl 把**同一 resource pool 的所有 worker 用 STRICT_PACK 强制同节点**，正是为了避免你遇到的"各占一半节点"碎片。所以用 verl 时一个 `RayResourcePool` 的 worker 会被装箱，跨 pool 才可能分散。
+>
+> ### 五、通用避免碎片的五条工程经验
+> | 手段 | 怎么做 | 适用 |
+> |---|---|---|
+> | **1. 该 colocate 的用 STRICT_PACK** | 一个 PG 装 N 个 bundle，强制同节点 | actor 间有通信/要填满节点 |
+> | **2. 调大 bundle 粒度** | 与其 2×4 不如 1×8（一个 actor 8 卡） | 需求可合并时 |
+> | **3. 精确声明 num_gpus** | 不要 `num_gpus=4` 实际只用 2，多占即碎片 | 按 real footprint 声明 |
+> | **4. 用 bin_pack 选项** | verl `RayWorkerGroup(bin_pack=True)` | 同 pool worker 装箱 |
+> | **5. autoscaler + 反碎片调度** | Ray autoscaler 按 pending 需求扩节点，凑满再放 | 多节点集群 |
+>
+> ### 六、误区
+> - ❌ "PG 自动避免碎片" → **PG 也可能制造碎片**。SPREAD 的 PG 必然分散造碎片；bundle 粒度和策略选错，PACK 也可能塞半节点。PG 是工具不是银弹，得设计。
+> - ❌ "两个 actor 各 4 卡，调度器会自动凑满 8 卡节点" → 不会。两个**独立** actor 各 first-fit，调度器不管它俩能不能凑；必须用**同一 PG + STRICT_PACK** 让调度器看到它俩的关系。
+> - ❌ "STRICT_PACK 永远最好" → 不。容错敏感（副本要分散）用 SPREAD；TP 必须 NVLink 同节点才用 STRICT_PACK；colocate 优先同节点但可容忍溢出用 PACK。策略选错要么造碎片要么造单点故障。
+> - ❌ "碎片无害" → 大集群里 50% 碎片 = 一半卡空转 = 一半钱白烧；且待机 PG 不释放（见 §8.3），碎片会长期占着。
+>
+> 相关：[[scheduling策略]]、[[GPU绑定]]、[[Ray与分布式调度]] §3.2、verl `RayWorkerGroup` bin_pack。
 
 ## 2. 为什么需要它（动机与背景）
 

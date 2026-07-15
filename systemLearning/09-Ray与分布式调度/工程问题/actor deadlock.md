@@ -83,6 +83,58 @@ class A:
 | **回调/continuation** | 用 `.then()` 风格，不阻塞 | 持有并等待 |
 | **watchdog** | 检测卡死 actor，重启 | 不可剥夺 |
 
+> [!note] 解答：六种规避方法细说
+> 上表每种解法只给了一句话，这里逐条展开**机制 / 代码 / 适用场景 / 代价 / RLHF 落地**。
+>
+> ### 解法 1：避免环（单向依赖设计）——治本，设计层
+> **机制**：actor 调用关系构 DAG，禁止 A→B 且 B→A 的回边。让调用方向单向流动（如 Learner→PolicyServer 单向），需要反向数据流时用**pull 模式**或**共享对象**而非回调。
+> **核心模式：single-controller**（verl/OpenRLHF 的做法）——一个 driver 持有所有 actor handle，**driver 单向调 actor，actor 之间不互调**。这从结构上保证无环：driver→A、driver→B、driver→C，A/B/C 之间没有边，自然无环。
+> ```python
+> # ❌ 有环：A 调 B，B 回调 A
+> class A:
+>     def m(self, b): return ray.get(b.work.remote(self))  # B 拿到 A 的 ref 会回调
+> # ✅ 无环：driver 编排，A/B 不互调
+> out_a = ray.get(a.produce.remote(data))      # driver 调 A
+> out_b = ray.get(b.consume.remote(out_a))     # driver 调 B，B 不知 A 存在
+> ```
+> **适用**：新系统设计时。**代价**：要把"actor 互调"重构成"driver 编排"，可能增加 driver 逻辑复杂度。**RLHF 落地**：verl `fit()` 主循环就是 single-controller，actor_rollout_wg/critic_wg 之间从不直接 RPC，全靠 driver `.remote().get()` 编排——天然无环，这是 verl 几乎不死锁的根因。
+>
+> ### 解法 2：async actor（`max_concurrency>1`）——线程池并发
+> **机制**：`@ray.remote(max_concurrency=N)` 让 actor 用**线程池**（N 线程）处理方法，同一 actor 的 N 个方法可并发执行。A 在 `method_a` 阻塞等 B 时，线程池另一线程可处理 B 回调的 `method_a2`，不死锁。
+> **数值选择**：推理服务（PolicyServer/vLLM rollout）设 10-100（高并发请求）；有状态训练 actor 设 1（默认串行保一致性）或小值。
+> **代价**：并发改同一 actor 的状态 → **必须自己加锁**（`threading.Lock`/`asyncio.Lock`），状态一致性责任从 Ray 转给开发者。详见下面 max_concurrency 那条批注的展开。
+> **适用**：actor 既要做阻塞 IO/RPC，又要响应回调；推理服务高并发。**RLHF 落地**：PolicyServer/rollout actor 常用 `max_concurrency>1` 让推理并发。
+>
+> ### 解法 3：不在 actor 内 `ray.get` 跨 actor——用 future 传递
+> **机制**：actor 方法内不调 `ray.get(b.method.remote())`（阻塞占线程），而是**返回 ObjectRef（future）**让调用方（driver）去 get，或用 `ray.wait` 非阻塞轮询。把"同步等待"上提到 driver。
+> ```python
+> # ❌ actor 内同步 get 跨 actor：危险
+> class A:
+>     def m(self, b): return ray.get(b.work.remote())  # 占住 A 线程
+> # ✅ actor 只返 future，driver get
+> class A:
+>     def m(self, b): return b.work.remote()           # 返 ObjectRef，不阻塞
+> ref = a.m.remote(b)                                  # driver 拿到 future
+> result = ray.get(ref)                                # driver get，A 线程早释放了
+> ```
+> **适用**：任何 actor 方法需要触发另一 actor 工作时。**代价**：调用链变长，driver 要管 future 编排。**RLHF 落地**：verl 的 `_compute_old_log_prob` 等都是 driver 调 `wg.method(batch).get()`，actor 方法内部不再嵌套跨 actor `ray.get`。
+>
+> ### 解法 4：超时——`ray.get(ref, timeout=...)`
+> **机制**：`ray.get(ref, timeout=N)` 在 N 秒内不返回抛 `GetTimeoutError`，actor 线程释放，可走重试/告警。打破"不可剥夺"条件（超时强行剥夺等待）。
+> **代价**：**治标不治本**——根因仍是循环依赖设计；超时只是让卡死变成异常而非永久挂。超时值难定（短了误杀长任务，长了仍烧钱）。
+> **适用**：兜底防御，所有跨 actor `ray.get` 都该设。**RLHF 落地**：PPO 每步 RPC 设 300s 超时，一个 rollout actor hang 不会让整训练空转。
+>
+> ### 解法 5：回调 / continuation——非阻塞链式
+> **机制**：用 `ray.wait(refs, timeout=0)` 非阻塞查 ready，或 Ray 的 task continuation（`.then()` 风格，老 API）让"完成后接着做"不阻塞当前线程。把"等结果再干下一步"变成"结果就绪时触发回调"。
+> **适用**：流水线式异步编排。**代价**：代码从线性变回调式，可读性降。**RLHF 落地**：verl fully_async 模式用 `asyncio` + `ray.wait` 实现 rollout 与训练重叠，属此解法的进阶版（见 [[asynchronous training]]）。
+>
+> ### 解法 6：watchdog——检测 + 重启
+> **机制**：周期性探活（actor 心跳/方法 ping），超时无响应判卡死，`ray.kill(actor)` 后重建。打破"不可剥夺"（强制杀）。
+> **代价**：**重启丢 actor 内存状态**（模型权重/buffer），需重建（重新加载权重）。是兜底而非首选。误判（把慢但活的 actor 当死）会无谓重启。
+> **适用**：生产容错兜底。**RLHF 落地**：训练框架常自建 watchdog 监控 actor 心跳 + mailbox 堆积（配合 [[Ray调试手段]] 的 dashboard/ray list）。
+>
+> ### 优先级口诀
+> **设计层避免环（解法1）> 编码层不阻塞（解法3/5）> 并发层 async（解法2）> 兜底层超时+watchdog（解法4/6）**。从左到右，越左越治本越早介入，越右越治标越被动。verl 靠解法 1（single-controller 无环）+ 解法 3（actor 不嵌套 get）几乎免疫死锁，解法 2/4/6 是补充。
 ### 3.4 async actor（max_concurrency）
 
 ```python
@@ -92,7 +144,72 @@ class A: ...
 
 `max_concurrency=N` 让 actor 用线程池（N 并发）处理方法，不串行。A 在 `method_a` 等 B 时，线程池其他线程可处理 B 回调的 `method_a2`，不死锁。但代价是**并发改状态**需自己加锁（asyncio/lock）——状态一致性责任从 Ray 转给开发者。
 
-
+> [!note] 解答：`max_concurrency` 是什么意思
+> 这是 Ray actor 的一个**并发度参数**，决定"同一 actor 同时能跑几个方法调用"。很多人没听过，因为**默认值是 1（串行）**，不显式设就感受不到它的存在。下面逐层拆。
+>
+> ### 一、默认行为：actor 方法串行（`max_concurrency=1`）
+> Ray actor 默认像一把单线程的"执行槽"：同一时刻**只有一个方法在执行**，其他方法调用进 actor 的 **mailbox 队列**排队，等当前方法返回才轮到下一个。这是 Ray 保证 **actor 状态一致性**的设计——串行执行就不会有两个方法并发改同一份状态。
+> ```
+> 调用 t1 ──┐
+>           ├──> actor [单线程执行槽]── 执行中, t2/t3 在 mailbox 排队
+> 调用 t2 ──┤
+> 调用 t3 ──┘
+> ```
+> 这种串行**安全但低效**：一旦方法内 `ray.get` 阻塞等别人，整个 actor 卡住，mailbox 里排队的调用全等——既吞吐低（见 §4.2 吞吐退化公式 $1/(T+T_{\text{wait}})$）又易死锁（§2.2 循环依赖）。
+>
+> ### 二、`max_concurrency=N`：线程池，N 并发
+> ```python
+> @ray.remote(max_concurrency=10)
+> class PolicyServer:
+>     def infer(self, req): ...
+> ```
+> 设了 `max_concurrency=10` 后，Ray 给该 actor 配一个**10 线程的线程池**，同一 actor 的**最多 10 个方法可并发执行**。mailbox 不再串行排队——只要线程池有空槽就立即调度新方法。于是：A 在 `method_a` 里 `ray.get(b...)` 阻塞时，线程池另一线程能处理 B 回调的 `method_a2`，**循环等待被打破，不死锁**。
+> ```
+> 调用 t1 ──┐
+> 调用 t2 ──┼──> actor [10 线程池]── t1/t2/.../t10 可并发
+> 调用 t3 ──┤     t1 阻塞时, 其他线程仍可处理新调用
+> ...        │
+> 调用 t11 ──┘  超过 10 的进 mailbox 排队
+> ```
+>
+> ### 三、数值怎么选
+> | 场景 | 建议值 | 理由 |
+> |---|---|---|
+> | 有状态训练 actor（learner） | 1（默认） | 状态多、并发改风险高，保串行 |
+> | 推理服务 actor（PolicyServer/vLLM rollout） | 10-100 | 高并发请求，阻塞 IO 多，需要并发吞吐 |
+> | 调度/编排 actor | 1 | 逻辑串行即可 |
+> | 既要阻塞等待又要响应回调 | >1（解死锁） | 否则回调进不去 |
+>
+> 经验：**能串行就串行**（默认 1 最安全），只有"方法会阻塞且需响应并发请求"时才调大。Ray 官方推荐从默认开始，遇到吞吐/死锁问题再调。
+>
+> ### 四、代价：状态一致性责任转移
+> 串行（默认）时，Ray 替你保证"两个方法不会并发改状态"——你写 actor 像写单线程程序，不用考虑锁。一旦 `max_concurrency>1`，**并发方法可能同时读写 `self.xxx`**，状态一致性责任从 Ray 转给你：
+> ```python
+> @ray.remote(max_concurrency=10)
+> class Counter:
+>     def __init__(self): self.n = 0; self.lock = threading.Lock()
+>     def inc(self):
+>         with self.lock:           # 必须！否则并发 inc 丢更新
+>             self.n += 1
+>     def get(self): return self.n
+> ```
+> 忘加锁 → 数据竞争（丢更新/撕裂读）。这是 §7 误区 3"max_concurrency 不是免费的"的根因。
+>
+> ### 五、vs asyncio actor（更安全的并发解）
+> Ray 还支持 **asyncio actor**（class 用 `async def` 方法）：
+> ```python
+> @ray.remote
+> class A:
+>     async def m(self, b):
+>         x = await b.work.remote()    # await 不阻塞线程, 用协程
+>         return x
+> ```
+> asyncio actor 是**单线程 + 协程并发**：`await` 时不占线程（让出给其他协程），能响应回调，又因为单线程**不会真并发改状态**（无数据竞争）。所以 asyncio actor 比 `max_concurrency` 线程池**更安全**——并发度够用又不用加锁。**优先用 asyncio actor**，只有方法不能用 `async def`（如调同步库）时才退回 `max_concurrency` 线程池。
+>
+> ### 六、一句话总结
+> `max_concurrency` = actor 的"执行槽位数"。默认 1 串行安全但易死锁/低吞吐；调大用线程池并发破死锁提吞吐，但代价是自己加锁保状态；更优解是 asyncio actor（协程并发不阻塞又不数据竞争）。RLHF 里推理 actor 常调大、训练 actor 保默认，verl 的 single-controller 设计让大多数 actor 根本不需要调大（无环不死锁）。
+>
+> 相关：[[actor model]]、[[task model]]、[[Ray与分布式调度]] §3.4、Ray docs `max_concurrency`。
 ## 4. 数学原理 / 公式
 
 ### 4.1 资源分配图与环检测

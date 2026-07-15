@@ -36,6 +36,8 @@ Obsidian vault 根目录为 `systemLearning/`，主索引起点为 `systemLearni
 ```
 systemLearning/
 ├── 整体目录.md                  ← 主索引（全部章节 + 双链入口）
+│
+├── 【第一部分：概念骨架，一~十二章】
 ├── 01-ML深度学习基础/
 ├── 02-Transformer与LLM核心结构/
 ├── 03-PyTorch与框架工程/
@@ -48,6 +50,16 @@ systemLearning/
 ├── 10-性能分析与优化/
 ├── 11-显存与内存系统/
 └── 12-训练稳定性工程/
+│
+├── 【第二部分：系统/源码/工程深度，十三~二十章】
+├── 13-GPU架构与CUDA编程/          ← CUDA kernel / 内存层级 / stream·event / Graph / Triton·CUTLASS·Flash / ncu
+├── 14-PyTorch内核与编译系统/       ← ATen·c10 / Dispatcher / Autograd Engine / Custom Op / torch.compile / DTensor / FSDP2
+├── 15-训练框架源码/                ← Megatron Core 各算子与调度 / 分布式 optimizer / MoE dispatcher / ckpt 转换
+├── 16-推理引擎源码/                ← PagedAttention / block manager / scheduler / chunked prefill / runner·worker / 量化
+├── 17-RL训推一体框架/              ← GRPO 体系 / 角色拓扑 / 权重同步 / logprob 一致性 / Agent rollout / 容错
+├── 18-集群网络存储与数据系统/      ← NVLink·IB·RDMA / alpha-beta / NCCL 故障 / 并行 FS / Arrow·Parquet / Spark·Ray Data
+├── 19-多模态与新型模型系统/        ← VLM 架构 / 多模态 batching / VLM RL / Diffusion LLM / Mamba·Hybrid
+└── 20-可靠性与开源工程/            ← Python·C++ 并发 / 测试 / Docker·K8s·elastic / 可观测 / 开源协作
 ```
 
 - 章节文件夹命名：`序号-章名/`（序号与 `整体目录.md` 的"一、二、三…"对应）。

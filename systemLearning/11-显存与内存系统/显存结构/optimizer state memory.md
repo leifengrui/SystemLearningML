@@ -212,7 +212,7 @@ print(f'7B 8卡 ZeRO-1 (FA+ckpt):    {train_mem(7e9,n_gpu=8)/1e9:.1f} GB/卡')
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: optimizer 算法（Adam/SGD，state 的来源）、[[gradient memory|gradient]]（state 的输入 $g_t$）、指数移动平均（$m, v$ 的数学）。
-- **下游（应用）**: [[ZeRO (DeepSpeed)]]/[[Fully Sharded Data Parallel]]（state 分片，ZeRO-1/3）、[[offloading (CPU-NVMe)]]（state 卸载）、8-bit optimizer（量化 state）、混合精度（state 精度管理）、[[GPU memory snapshot]]（诊断 state 占用）、LLM 训练显存预算。
+- **下游（应用）**: [[ZeRO (DeepSpeed)]]/[[Fully Sharded Data Parallel]]（state 分片，ZeRO-1/3）、[[offloading (CPU-NVMe)]]（state 卸载）、8-bit optimizer（量化 state）、混合精度（state 精度管理）、[[GPU memory snapshot]]（诊断 state 占用）、[[训练显存估计]]（optimizer state 是训练态 $16N$ 的大头，占 75%）、LLM 训练显存预算。
 - **对比 / 易混**:
   - **optimizer state vs [[gradient memory\|gradient]]**：optimizer 内部状态（跨 step 的 $m,v$，全程）vs optimizer 输入（当前 step 的 $g$，用完释放）。state 是"机器记忆"，gradient 是"本次原料"。
   - **optimizer state vs 权重**：optimizer 的状态（$m,v$）vs 模型参数（$\theta$）。同形状但不同用途。state 更新参数，参数是模型。
@@ -288,4 +288,4 @@ Adam 的 $m, v$ 数值稳定性影响训练：$v$ 下溢（fp16）致除以 0、
 [[GPU memory snapshot]] 的显存分类中，optimizer state 是大头（~55%）。snapshot 能定位 optimizer state 占比，确认是否需 ZeRO-1/8-bit/offload 优化。
 
 ---
-相关: [[显存结构]] | [[activation memory]] | [[gradient memory]] | [[ZeRO (DeepSpeed)]] | [[Fully Sharded Data Parallel]] | [[offloading (CPU-NVMe)]] | [[混合精度]] | [[训练稳定性工程]] | [[GPU memory snapshot]] | [[Data Parallel]] | [[overlap strategy]]
+相关: [[显存结构]] | [[activation memory]] | [[gradient memory]] | [[训练显存估计]] | [[ZeRO (DeepSpeed)]] | [[Fully Sharded Data Parallel]] | [[offloading (CPU-NVMe)]] | [[混合精度]] | [[训练稳定性工程]] | [[GPU memory snapshot]] | [[Data Parallel]] | [[overlap strategy]]

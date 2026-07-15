@@ -171,7 +171,7 @@ print(f'micro_batch=4, accum=8 -> 等效 batch={eff} (gradient 显存不变, act
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: 反向传播（gradient 的产生）、损失函数（梯度的源）、链式法则。
-- **下游（应用）**: [[optimizer state memory]]（optimizer 用 gradient）、[[ZeRO (DeepSpeed)]]/[[Fully Sharded Data Parallel]]（gradient 分片）、[[overlap strategy]]/[[Data Parallel]]（gradient allreduce + 分桶）、[[communication bottleneck]]（gradient 同步是通信主源）、gradient clipping/accumulation（训练技巧）、混合精度（gradient 精度管理）、[[训练稳定性工程]]（梯度爆炸/消失）。
+- **下游（应用）**: [[optimizer state memory]]（optimizer 用 gradient）、[[ZeRO (DeepSpeed)]]/[[Fully Sharded Data Parallel]]（gradient 分片，ZeRO-2）、[[overlap strategy]]/[[Data Parallel]]（gradient allreduce + 分桶）、[[communication bottleneck]]（gradient 同步是通信主源）、gradient clipping/accumulation（训练技巧）、混合精度（gradient 精度管理）、[[训练显存估计]]（gradient 占训练态 $16N$ 中的 $2N$）、[[训练稳定性工程]]（梯度爆炸/消失）。
 - **对比 / 易混**:
   - **gradient vs [[activation memory\|activation]]**：反向产生的梯度（供 optimizer）vs 前向存的中间（供反向）。前者与 batch 无关，后者线性于 batch + $s^2$。
   - **gradient vs [[optimizer state memory\|optimizer state]]**：optimizer 的输入（梯度）vs optimizer 的内部状态（Adam m/v）。前者反向产生用完释放，后者全程常驻。gradient 是"原料"，optimizer state 是"加工机器"。
@@ -240,4 +240,4 @@ PyTorch DDP `gradient_as_bucket_view=True`：gradient 是 bucket 的 view，buck
 峰值显存（反向结束、optimizer step 前）= 权重 + activation 峰值 + gradient + optimizer state。gradient 在峰值时刻存在（反向产生未释放）。减峰值：ZeRO-2 分片 gradient、gradient 卸载（[[offloading (CPU-NVMe)]]）。
 
 ---
-相关: [[显存结构]] | [[activation memory]] | [[optimizer state memory]] | [[ZeRO (DeepSpeed)]] | [[Fully Sharded Data Parallel]] | [[Data Parallel]] | [[overlap strategy]] | [[communication bottleneck]] | [[gradient checkpointing]] | [[offloading (CPU-NVMe)]] | [[混合精度]] | [[训练稳定性工程]] | [[GPU memory snapshot]]
+相关: [[显存结构]] | [[activation memory]] | [[optimizer state memory]] | [[训练显存估计]] | [[ZeRO (DeepSpeed)]] | [[Fully Sharded Data Parallel]] | [[Data Parallel]] | [[overlap strategy]] | [[communication bottleneck]] | [[gradient checkpointing]] | [[offloading (CPU-NVMe)]] | [[混合精度]] | [[训练稳定性工程]] | [[GPU memory snapshot]]

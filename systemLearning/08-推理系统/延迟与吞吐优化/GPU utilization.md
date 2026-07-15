@@ -15,6 +15,52 @@
 > - **为什么**：GPU 贵，闲置=烧钱；推理 decode 天然 memory-bound 算力闲置，需诊断优化。
 > - **怎么分析**：roofline 模型——算术强度（FLOP/Byte）决定是 compute-bound 还是 memory-bound。
 
+> [!note] 解答：gpu-memory-utilization 为何设 0.8/0.9 不设 1.0 / 为何 OOM 反而要降利用率
+> **这里的"利用率"指 vLLM/SGLang 的 `--gpu-memory-utilization` 参数（KV cache 显存池占比），与上文 §1 的"算力/带宽利用率（roofline）"是两个东西。** 本 callout 专答这个参数。
+>
+> **① 0.8 / 0.9 为什么不设 1.0？要留给谁？**
+>
+> vLLM 启动时流程：① 载入模型权重 → ② 探测当前已用显存 → ③ 按 `utilization × 总显存 − 权重 − 已用` 算出剩余 → ④ 把这块**全部预分配**成 KV cache 池。也就是说 util=0.9 意味着"权重 + KV 池 + 框架已用 ≈ 90% 显存"。剩下那 10% 是**运行时**才冒出来的临时开销，必须空着等它：
+>
+> | 留给谁 | 占多少 | 什么时候吃 |
+> |---|---|---|
+> | **CUDA context + PyTorch caching allocator 元数据** | 300–600 MB | 进程启动即常驻，分不掉 |
+> | **forward 的激活（activation）张量** | 与 batch × seq 成正比 | prefill 长序列时峰值极高 |
+> | **算子 workspace**（cuBLAS GEMM、cuDNN、FlashAttention 的 SRAM tiling/中间缓冲） | 数十~数百 MB | 算子执行瞬间分配 |
+> | **临时张量 / 矩阵转置 / logits（$B \times V$）** | logits 对大词表（128k）很可观 | 采样前必现 |
+> | **[[speculative decoding]] 的 draft model / 候选树** | draft head ~1–2GB | 开了 spec 才有 |
+> | **其他进程/监控 agent/nvidia-smi 自身** | 不可控 | 同卡混部时 |
+> | **峰值尖刺**（长 context、大 batch、动态 shape） | 不可预测 | 高峰瞬间 |
+>
+> util=1.0 等于把这 10% 余量全压光，**启动看着没事，一跑长 prompt / 大 batch / 开 spec 立刻 OOM**。设 0.9 是"留给运行时临时开销的安全垫"，设 0.8 更保守（小卡、大模型权重、同卡多进程、混部场景）。
+>
+> **② 为什么推理 OOM 反而要"降低 gpu 利用率"？**
+>
+> 直觉矛盾但逻辑顺：KV 池是**启动时一次性预分配**的刚性大块，util 越高池越大，池一旦占了地，forward 时要的激活/workspace 就**抢不到**，于是 OOM。降低 util = **主动把 KV 池缩小，给运行时临时开销腾地方**。
+>
+> ```
+> util=0.95 → KV池=50GB, 权重=14GB, 总=64GB/80GB
+>            prefill长序列时激活要8GB → 找不到连续空间 → CUDA OOM
+> util=0.85 → KV池=40GB, 权重=14GB, 总=54GB/80GB, 留26GB
+>            prefill激活8GB轻松放下 → 不 OOM
+> ```
+>
+> 代价：KV 池小了 → 能同时并发的请求数 ↓ / 能支持的最大 context ↓ / 吞吐 ↓（因为 [[dynamic batching]] §2 说的 batch=1 浪费更严重）。这是个**显存预算重分配**：少给 KV cache、多给运行时临时。本质是 [[batching tradeoff]] 在显存维度的体现——KV 池喂吞吐，临时开销喂不崩。
+>
+> **决策经验：**
+>
+> | 场景 | 推荐 util |
+> |---|---|
+> | 单卡单模型、独占、context 不长 | 0.90（vLLM 默认） |
+> | 大模型权重占大头（70B/单卡 TP） | 0.85–0.88 |
+> | 长 context（128k+）或长 prefill 峰值高 | 0.80–0.85 |
+> | 同卡多进程 / 混部 / 有监控 agent | 0.80 |
+> | OOM 频发、先求稳 | 0.80 起步，逐步上调找甜点 |
+>
+> > [!tip] 排错顺序
+> > 报 OOM 别急着降 util，先确认：① 权重是否太大（该上 [[Tensor Parallel]] 而没上）② 是否同卡多实例抢卡 ③ context 长度峰值 ④ `--swap-space`（CPU 换出兜底）有没有开。这几条治完还 OOM，再降 util。详见 [[prefix caching]] QA「一打开很容易把显存打爆」。
+>
+> 关联：[[KV cache management]]（KV 池为何要预分配、PagedAttention 的零存整取）、[[batching tradeoff]]（KV 池大小直接限制 max batch 与 max context）、[[prefix caching]]（命中率低时冷前缀堆积会加剧显存压力）、[[FLOPs计算]] / [[activation memory]]（运行时临时开销的构成）、[[训推不一致]] / [[TP|Tensor Parallel]]（权重太大该拆卡）。
 
 ## 2. 为什么需要它（动机与背景）
 

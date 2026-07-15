@@ -197,7 +197,7 @@ print(f'7B checkpointing 后: {ckpt/1e9:.1f} GB (vs 全激活 {fa/1e9:.1f}, {fa/
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: 前向传播 / 反向传播（activation 的存在理由）、[[Transformer]]/attention（激活的来源结构）。
-- **下游（应用）**: [[gradient checkpointing]]（重算换激活显存）、[[FlashAttention]]（减 attention 激活的 $s^2$ 项）、[[ZeRO (DeepSpeed)]]/[[Fully Sharded Data Parallel]]（分片激活）、混合精度（减半激活）、sequence parallelism（切分激活）、[[offloading (CPU-NVMe)]]（激活卸载到 CPU）、[[memory bottleneck]]（激活读带宽是反向 memory-bound 主因）、[[GPU memory snapshot]]（诊断激活占用）。
+- **下游（应用）**: [[gradient checkpointing]]（重算换激活显存）、[[FlashAttention]]（减 attention 激活的 $s^2$ 项）、[[ZeRO (DeepSpeed)]]/[[Fully Sharded Data Parallel]]（分片激活）、混合精度（减半激活）、sequence parallelism（切分激活）、[[offloading (CPU-NVMe)]]（激活卸载到 CPU）、[[memory bottleneck]]（激活读带宽是反向 memory-bound 主因）、[[GPU memory snapshot]]（诊断激活占用）、[[训练显存估计]]（激活是训练峰值显存公式 $M\approx 16N+M_{\text{act}}$ 的动态项，与 batch/seq 相关）。
 - **对比 / 易混**:
   - **activation vs [[gradient memory\|gradient]]**：前向中间（供反向用）vs 反向梯度（供 optimizer 用）。前者线性于 batch+$s^2$，后者与 batch 无关。
   - **activation vs [[optimizer state memory\|optimizer state]]**：动态短生命周期 vs 静态全程。前者随 batch/seq 变，后者固定。
@@ -262,4 +262,4 @@ Megatron 的 sequence parallelism：把非 attention 部分的激活（LN、drop
 反向传播时读激活算梯度，是 memory-bound（激活读带宽是瓶颈，[[memory bottleneck]]）。减激活（checkpointing/FA）不仅省显存（静态容量），也减带宽（动态读取），提反向 throughput。是显存 + 带宽的双重优化。
 
 ---
-相关: [[显存结构]] | [[gradient memory]] | [[optimizer state memory]] | [[gradient checkpointing]] | [[FlashAttention]] | [[ZeRO (DeepSpeed)]] | [[Fully Sharded Data Parallel]] | [[offloading (CPU-NVMe)]] | [[memory bottleneck]] | [[GPU memory snapshot]] | [[KV cache management]] | [[Transformer]] | [[attention]] | [[混合精度]]
+相关: [[显存结构]] | [[gradient memory]] | [[optimizer state memory]] | [[训练显存估计]] | [[gradient checkpointing]] | [[FlashAttention]] | [[ZeRO (DeepSpeed)]] | [[Fully Sharded Data Parallel]] | [[offloading (CPU-NVMe)]] | [[memory bottleneck]] | [[GPU memory snapshot]] | [[KV cache management]] | [[Transformer]] | [[attention]] | [[混合精度]]

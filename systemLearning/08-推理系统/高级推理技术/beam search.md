@@ -5,6 +5,50 @@
 > **别名**: beam search / 束搜索 / beam search decoding
 > **难度**: 中（需懂自回归 + 搜索）
 
+> [!note] 解答：beam search 用在哪 / 什么是序列解码 / 它是不是在加速 decoding
+> **三个子问逐个拆。**
+>
+> **① 用在哪里的技术？**
+> beam search 是**序列生成（sequence generation）任务**的解码算法，用在"模型输出一串 token、且希望这串 token 整体概率最高/质量最好"的场景。典型落地：
+>
+> | 场景 | 为什么用 beam | 备注 |
+> |---|---|---|
+> | 神经机器翻译 NMT（GNMT、Transformer-big） | 有参考译文，要"最像标准答案"的高概率输出 | GNMT 默认 $B$=4–8 |
+> | 文本摘要（abstractive summarization） | 有参考摘要，求忠实、连贯 | $B$=4 常见 |
+> | 图像描述生成 image captioning（Show-Attend-Tell） | 输出短、要贴图 | $B$=3–5 |
+> | 语音识别 ASR（RNN-T、Listen-Attend-Spell） | 要逐字正确率 | 与 CTC/CTC+rescore 并存 |
+> | 结构化输出（SQL 生成、代码生成） | 有语法约束、要准确 | 配合 constrained beam |
+>
+> **LLM 时代（GPT 系后）beam 大量被 [[采样策略|sampling（temperature/top-p/top-k）]]取代**——对话/创作要多样性、自然感，beam 输出"高概率但平庸、dull"；beam 退守到翻译/摘要/结构化输出等"有标准答案"的窄场景（详见 §8.1）。所以你今天在 vLLM/SGLang 调 LLM 服务，默认走的是 sampling，不是 beam。
+>
+> **② 什么是序列解码（decoding）？**
+> 解码 = **从模型每步输出的概率分布里，挑出具体 token 拼成最终序列的过程**。自回归 LLM 生成时：
+>
+> 1. 前向算出最后位置 logits $z\in\mathbb{R}^V$（$V$=词表大小）；
+> 2. softmax 得到下一个 token 的概率分布 $p(x_i\mid x_{<i})$；
+> 3. **解码策略**决定怎么从这个分布取 token：argmax（贪心）/ 按分布采（sampling）/ 保 top-$B$ 继续扩展（beam）/ 用 draft 猜+target 验（[[speculative decoding]]）；
+> 4. 选中的 token append 回输入，回到第 1 步，直到 EOS 或 max_len。
+>
+> 第 3 步就是"decoding"。模型已经把分布给出来了，**解码策略是分布→序列的后处理**。同一模型、同一权重、同一 prompt，不同解码策略会产出**质量/多样性/速度完全不同**的输出——这就是解码策略的意义。详见 [[autoregressive decoding]]。
+>
+> **③ 这是在加速 decoding 吗？——不是！恰恰相反，beam search 比贪心慢 $B$ 倍。**
+>
+> 这是最高频的混淆，必须澄清：
+>
+> | 维度 | beam search | [[speculative decoding]] |
+> |---|---|---|
+> | 目标 | **提质**（近似全局最优序列） | **加速**（一次 forward 出多 token） |
+> | 改变输出分布？ | 是（倾向高概率序列） | 否（保持 target 采样分布，无损） |
+> | 计算量 | 贪心的 $B$ 倍（每步算 $B$ 条候选） | ≈ 贪心的 1 倍 + 少量验证 overhead |
+> | 速度 | **更慢** | **更快**（1.8–4×） |
+> | 用在哪 | 翻译/摘要等质量优先 | LLM 服务/[[rollout worker]] 采样加速 |
+>
+> beam search 每步要为 $B$ 条候选各算一次 logits 并 top-$B$ 剪枝，计算量 $\approx B\times$ 贪心，**是拿时间换质量**。"加速 decoding"的是 [[speculative decoding]] / [[parallel decoding]]，二者用 draft 或并行头让一次 forward 产出/验证多个 token，目标恰好是更快。beam 与 speculative 正交：可以让 draft 加速 beam 的每步扩展，但 beam 本身绝不加速。
+>
+> > [!warning] 一句话防混
+> > **beam search = 慢但更准的"搜索"；speculative decoding = 快且无损的"加速"。把 beam 当加速是错的。**
+>
+> 关联：[[autoregressive decoding]]（什么是解码）、[[采样策略]]（贪心/sampling/beam 三种 decoding 全谱系）、[[speculative decoding]]（真正的 decoding 加速技术）、[[sampling throughput]]（RLHF 里采样吞吐受 decoding 策略影响）。
 
 ## 1. 一句话定义
 
