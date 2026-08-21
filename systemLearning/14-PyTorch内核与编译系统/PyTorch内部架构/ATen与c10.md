@@ -8,7 +8,8 @@
 
 ## 1. 一句话定义
 
-**ATen 与 c10** 是 PyTorch 的 **C++ 底层**：**c10（Core 10）** 是最底层基础库（无依赖），定义 **`TensorImpl`/`Storage`/`ScalarType`/`DispatchKey`/`DispatchKeySet`** 等核心数据结构与分发原语；**ATen（A Tensor Library）** 是建在 c10 之上的算子库，定义 `torch::add`/`torch::mm` 等数百个 native tensor operation 的实现（CPU/CUDA/backend 无关声明 + 各后端 kernel）。Python 层的 `torch.Tensor` 只是一个**指向 c10 `TensorImpl` 的智能指针**（`intrusive_ptr`，handle 语义），所有 op 经 [[Dispatcher]] 路由到 ATen 的对应后端实现。简言之：**c10 = 数据结构 + 分发骨架，ATen = 算子声明与实现，二者构成 PyTorch 内核的 C++ 地基**。
+**ATen 与 c10** 是 PyTorch 的 **C++ 底层**：**c10（Core 10）** 是最底层基础库（无依赖），定义 **`TensorImpl`/`Storage`/`ScalarType`/`DispatchKey`/`DispatchKeySet`** 等核心数据结构与分发原语；**ATen（A Tensor Library）** 是建在 c10 之上的算子库，定义 `torch::add`/`torch::mm` 等数百个 native tensor operation 的实现（CPU/CUDA/backend 无关声明 + 各后端 kernel）。
+Python 层的 `torch.Tensor` 只是一个**指向 c10 `TensorImpl` 的智能指针**（`intrusive_ptr`，handle 语义），所有 op 经 [[Dispatcher]] 路由到 ATen 的对应后端实现。简言之：**c10 = 数据结构 + 分发骨架，ATen = 算子声明与实现，二者构成 PyTorch 内核的 C++ 地基**。
 
 > [!note] 三句话定位
 > - **是什么**：c10 是底层基础库（TensorImpl/Storage/ScalarType/DispatchKey），ATen 是其上的算子库（add/mm/matmul 等的声明 + 各后端实现）。

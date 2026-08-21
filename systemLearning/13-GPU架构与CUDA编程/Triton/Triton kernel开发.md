@@ -236,7 +236,7 @@ def f(x):
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: [[GPU执行模型]]（block/warp/tensor core）、[[GPU内存层级]]（smem tiling/bank）、[[Roofline模型]]（autotune 用 throughput 判优劣）、[[occupancy分析]]（autotune 隐含调 occupancy）。
-- **下游（应用）**: [[torch.compile]]/[[Inductor]]（默认 codegen 后端）、[[FlashAttention]]/[[FlashInfer]]（主力 kernel 语言）、vLLM/SGLang 的自定义算子、[[fused kernel]]（融合 elementwise/norm 用 Triton 写）。
+- **下游（应用）**: [[torch.compile]]/[[Inductor]]（默认 codegen 后端）、[[FlashAttention]]/[[FlashInfer]]（主力 kernel 语言）、vLLM/SGLang 的自定义算子、[[fused kernel融合算子]]（融合 elementwise/norm 用 Triton 写）。
 - **对比 / 易混**:
   - **Triton vs CUDA C**：Triton block-level（Python），CUDA thread-level（C++）。Triton 生产力高，CUDA 极致控制强。
   - **Triton vs [[CUTLASS与GEMM|CUTLASS]]**：Triton Python + 自动 codegen；CUTLASS C++ 模板，更接近硬件、控制更细但门槛更高。
@@ -291,4 +291,4 @@ CUTLASS（C++ 模板）控制更细，但门槛高。Triton 易用但某些极�
 Triton 编程模型整理自 OpenAI Triton 文档与 "Tiled Matrix Multiply" tutorial，autotune 语义见 `triton.autotune` 文档，与 [[torch.compile]]/[[Inductor]] 集成见 PyTorch 2.x 文档。
 
 ---
-相关: [[Triton]] | [[GPU执行模型]] | [[GPU内存层级]] | [[Roofline模型]] | [[occupancy分析]] | [[CUTLASS与GEMM]] | [[FlashAttention]] | [[FlashInfer]] | [[fused kernel]] | [[torch.compile]] | [[Inductor]]
+相关: [[Triton]] | [[GPU执行模型]] | [[GPU内存层级]] | [[Roofline模型]] | [[occupancy分析]] | [[CUTLASS与GEMM]] | [[FlashAttention]] | [[FlashInfer]] | [[fused kernel融合算子]] | [[torch.compile]] | [[Inductor]]

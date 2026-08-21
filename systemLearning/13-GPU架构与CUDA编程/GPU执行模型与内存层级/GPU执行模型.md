@@ -7,15 +7,74 @@
 
 
 ## 1. 一句话定义
-
 **GPU 执行模型**是 GPU 如何组织、调度、执行线程的抽象——程序员按 **grid → block → thread** 三级层次组织并行计算，硬件把同 block 的 32 个 thread 编成一个 **warp**，由 SM 的 warp 调度器在驻留的多个 warp 间快速切换以**隐藏延迟**，整体遵循 **SIMT**（Single Instruction, Multiple Threads）执行范式：同一 warp 的 32 线程在同一时刻执行同一指令，但各自处理不同数据。它与 CPU 的"低延迟单线程"哲学相反——GPU 靠**海量并行 + 切换**换吞吐，是理解所有后续 CUDA 知识（[[GPU内存层级]]、[[SM utilization]]、[[Roofline模型]]、[[FlashAttention]]）的根基。
+![[Pasted image 20260719142033.png]]
 
 > [!note] 三句话定位
 > - **是什么**：grid/block/thread 三级 + warp（32 线程）调度 + SIMT 执行，靠多 warp 切换隐藏延迟。
 > - **为什么**：GPU 算力远超单线程可消化的量，必须靠海量并行塞满算力；延迟靠"等一个 warp 时切到另一个"藏起来。
 > - **与 CPU 执行模型区别**：CPU 重低延迟（深流水、分支预测、大缓存），GPU 重吞吐（多 warp、简单调度、靠并行度盖延迟）。
 
-
+> [!note] 解答：kernel 和本笔记的执行模型是什么关系？launch 开销 ~2-5 μs 对吗？
+> **一句话**：**kernel 就是"按本笔记这套 grid/block/thread 模型写的那段 GPU 代码"**——执行模型描述的是"kernel 怎么被组织、怎么被硬件调度执行"，两者是"被运行的程序"和"运行它的抽象机制"的关系。你引用的 launch 开销数字基本对，但更精确是 **~3-10 μs**（2-5 μs 是乐观值，看路径）。
+>
+> ### 一、kernel 是什么、和执行模型怎么对应
+> **kernel**（CUDA kernel）= 程序员写的、在 GPU 上跑的那个函数，语法标量（写一个 thread 干什么），但被硬件按 warp(32) 批量并发执行。它的"入口"就是这一句：
+>
+> ```cuda
+> my_kernel<<<grid, block>>>(arg1, arg2);   // <<<>>> 即 launch 语法
+> ```
+>
+> 这里 `grid`、`block` 正是本笔记 §3.1 讲的三级线程层次的前两级。也就是说：
+>
+> | 概念 | 角色 | 出现在哪 |
+> |---|---|---|
+> | **kernel 代码体** | "每个 thread 要做什么"的标量函数 | `__global__ void my_kernel(...)` |
+> | **launch 配置 `<<<grid, block>>>`** | "这次调用起多少 thread、怎么分 block" | 调用点 |
+> | **执行模型（本笔记）** | 硬件如何把 grid/block 映射到 SM/warp、如何 SIMT 调度、如何隐藏延迟 | 本笔记全文 |
+>
+> 关系链：**kernel 代码 + launch 配置 → 按"执行模型"描述的链路在 GPU 上跑出来**。本笔记 §3.5 的"kernel launch 到执行的链路"就是把这两者串起来的全过程：
+> 1. CPU 端打包参数写入 launch buffer；
+> 2. GPU front-end 取出 kernel 描述符 + grid/block 配置；
+> 3. block scheduler 把 grid 的 block 分发到各 SM；
+> 4. 每 block 的 32 thread 编成一个 warp，进 SM 的 warp 调度池（SIMT 执行）；
+> 5. 全部 block 完成 → kernel 结束。
+>
+> 所以本笔记讲的 grid/block/thread、warp、SIMT、延迟隐藏——**全部都是"kernel 被硬件执行时发生的事"**。没有 kernel 就没有"执行模型的应用对象"；没有执行模型，kernel 就只是一段没被调度的代码。一句话：**kernel 是"被运行的程序"，执行模型是"硬件怎么运行它的抽象"**。
+>
+> ### 二、launch 开销：你引的数字对，但要校正
+> 你写的"~2-5 μs（CPU 解析参数、走 runtime/driver、提交到 GPU 命令队列）"——**机制描述完全正确**，数字偏乐观。实测范围更宽：
+>
+> | 路径 | 典型开销 | 触发条件 |
+> |---|---|---|
+> | CUDA Driver API（最薄） | **~2-5 μs** | 直接用 `cuLaunchKernel`、参数少、命令队列空闲 |
+> | CUDA Runtime API（`<<<>>>`） | **~3-10 μs** | 默认 PyTorch/Triton 走的路，多一层 runtime 解析 |
+> | WDDM 模式（Windows） | **~20-50 μs** | 走 Windows 驱动批次提交，慢得多 |
+> | TCC 模式 / Linux | 接近 driver API | 直连、无批次 |
+> | 加 cuLaunchHostFunc / 多参 | +1-3 μs | 参越多打包越久 |
+>
+> 你看到的"2-5 μs"通常是**最佳情形**（参数少、Linux/TCC、命令队列空）。生产里更稳的估计是 **3-10 μs / launch**，WDDM 下能到几十 μs。这也是为什么：
+> - **小 kernel**（elementwise、几百元素）会被 launch 开销吃掉——例如一次实际计算 1 μs 的 kernel，launch 5 μs，五分之四时间在 CPU 端排队。
+> - [[CUDA Graph与graph capture]] 把一串 launch 录成图、replay 只付一次"图提交"开销（~几 μs 总），把 N 次 launch 的 N×5μs 压成 1×5μs，对小 kernel 加速 10-100×。
+> - [[fused kernel融合算子]] 把多个算子合并成一个 kernel，直接少 launch 次数。
+>
+> ### 三、机制再细化：launch 那 5 μs 花在哪
+> 你说的"CPU 解析参数、走 runtime/driver、提交到命令队列"是对的，展开：
+>
+> 1. **参数打包**（~0.5-1 μs）：把 `<<<grid, block>>>` 配置 + 实参（指针/标量）序列化进一块 host-side 的 launch buffer（kernel 参数块，GPU 可见）。
+> 2. **runtime → driver 调用**（~1-2 μs）：CUDA Runtime API（`cudaLaunchKernel`）薄薄包一层调 Driver API（`cuLaunchKernel`），多一次跳转。
+> 3. **driver 提交到命令队列**（~1-2 μs）：driver 把 launch 指令（kernel 句柄 + grid/block + 参数指针）追加到对应 stream 的 GPU command queue（一块 host-pinned ring buffer），然后 doorbell 通知 GPU front-end 有新命令。
+> 4. **GPU front-end 取指 + block 分发**（~1-2 μs）：GPU 的前端从队列读出描述符，block scheduler 开始往各 SM 分发 block。这一步才算"GPU 开始干活"。
+>
+> 总和 3-7 μs 是常见区间。**CPU 端把指令塞进队列就返回了**（async），所以 CPU 看到的 launch 开销 ≠ GPU 看到的 kernel 启动延迟，后者还要加 front-end + block 分发时间。
+>
+> ### 四、为什么本笔记要把 launch 开销挂在执行模型下
+> 因为 launch 开销是**执行模型在"kernel 太小"时的副作用**：执行模型的设计是"一次 launch 起几百万 thread、把 SM 喂饱"，所以单次 launch 本身就有固定成本（几 μs）——这个成本在大 kernel 上被海量计算摊平可忽略，在小 kernel 上就暴露成瓶颈。这是"吞吐优先"执行模型的固有代价，必须靠 Graph capture / 算子融合来对冲。
+>
+> ### 五、一句话总结
+> > kernel = 你写的 GPU 函数 + `<<<grid, block>>>` launch 配置；执行模型 = 硬件按 grid→block→warp→SIMT 把这个 kernel 跑起来的抽象机制。launch 开销 ~2-5 μs 是乐观值，生产常见 3-10 μs（WDDM 几十 μs），机制是 CPU 打包参数→runtime→driver→写命令队列→GPU front-end 取指分发。小 kernel 被这开销吃掉→用 [[CUDA Graph与graph capture]] / [[fused kernel融合算子]] 治。
+>
+> 详见本笔记 §3.5 kernel launch 到执行的链路、§8 延伸细节。关联 [[kernel launch overhead]]、[[CUDA Graph与graph capture]]、[[fused kernel融合算子]]、[[CUDA stream与event]]、[[SM utilization]]。
 ## 2. 为什么需要它（动机与背景）
 
 ### 2.1 GPU 的设计哲学：吞吐优先
@@ -81,12 +140,12 @@ GRID = math.ceil(N / BLOCK)
 
 ### 3.3 SIMT vs SIMD
 
-| | SIMD（CPU AVX） | SIMT（GPU） |
-|---|---|---|
-| 宽度 | 固定（AVX-512 = 16 × float32） | warp = 32，固定 |
-| 编程模型 | 显式向量化（intrinsic） | 写标量代码，硬件自动束成 warp |
-| 分支 | 全走同一指令，分支用 mask | warp divergence：分化的分支**串行**执行各路径 |
-| 寄存器 | 一份向量寄存器 | 每线程独立寄存器，硬件分配 |
+|      | SIMD --Single Program Multiple Data（CPU AVX） | SIMT（GPU）                        |
+| ---- | -------------------------------------------- | -------------------------------- |
+| 宽度   | 固定（AVX-512 = 16 × float32）                   | warp = 32，固定                     |
+| 编程模型 | 显式向量化（intrinsic）                             | 写标量代码，硬件自动束成 warp                |
+| 分支   | 全走同一指令，分支用 mask                              | warp divergence：分化的分支**串行**执行各路径 |
+| 寄存器  | 一份向量寄存器                                      | 每线程独立寄存器，硬件分配                    |
 
 SIMT 让程序员写"看起来像标量"的代码，硬件按 warp 批量执行，比 SIMD 对程序员友好。但**warp divergence**是代价：同一 warp 内若 `if (cond)` 让一半线程走 A、一半走 B，硬件先让全 warp 走 A（B 的线程 masked idle），再走 B（A 的 idle），串行化 → 并行度折半。
 
@@ -226,7 +285,7 @@ print(warp_divergence_cost(32, 0, 10, 0))    # (10, 0.0)
 > 不一定。block 大 → 每 block 占的寄存器/smem 多 → SM 能驻留的 block 数少。有时小 block（128）反而能驻留更多 block，occupancy 更高。occupancy 由寄存器/smem/block-size 共同决定，见 [[SM utilization]]。
 
 > [!warning] 误区 5：忽视 launch 开销
-> 小 kernel（elementwise 少量元素）的耗时被 launch 开销（几 μs）主导，算力远用不满。要么用 [[CUDA Graph与graph capture]]，要么融合算子（[[fused kernel]]），要么提 batch。
+> 小 kernel（elementwise 少量元素）的耗时被 launch 开销（几 μs）主导，算力远用不满。要么用 [[CUDA Graph与graph capture]]，要么融合算子（[[fused kernel融合算子]]），要么提 batch。
 
 
 ## 8. 延伸细节
@@ -264,4 +323,4 @@ tensor core（矩阵乘加速单元）以 warp 为单位提交：一个 `wmma::m
 执行模型核心（grid/block/thread、warp、SIMT、延迟隐藏）整理自 NVIDIA CUDA C++ Programming Guide 的 Hardware Implementation 章节，以及 《Programming Massively Parallel Processors》第 3-4 章。
 
 ---
-相关: [[GPU执行模型与内存层级]] | [[GPU内存层级]] | [[SM utilization]] | [[occupancy分析]] | [[Roofline模型]] | [[kernel launch overhead]] | [[CUDA stream与event]] | [[CUDA Graph与graph capture]] | [[fused kernel]] | [[CUTLASS与GEMM]] | [[Triton kernel开发]] | [[FlashAttention]]
+相关: [[GPU执行模型与内存层级]] | [[GPU内存层级]] | [[SM utilization]] | [[occupancy分析]] | [[Roofline模型]] | [[kernel launch overhead]] | [[CUDA stream与event]] | [[CUDA Graph与graph capture]] | [[fused kernel融合算子]] | [[CUTLASS与GEMM]] | [[Triton kernel开发]] | [[FlashAttention]]

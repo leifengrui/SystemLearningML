@@ -246,7 +246,7 @@ y_dt = x_dt @ W_dt  # DTensor op, 自动推导 [Shard(1)], 前向无通信, 反�
 
 ### 8.1 融合 QKV 与 bias_add
 
-Megatron 常用融合 kernel 算 QKV（`FusedQKV`）+ bias add（`skip_bias_add=True`，bias 在下游融合 kernel 内加）。是 [[fused kernel]] 的实战。TE 的 `LayerNormLinear` 融合 norm+QKV+bias。
+Megatron 常用融合 kernel 算 QKV（`FusedQKV`）+ bias add（`skip_bias_add=True`，bias 在下游融合 kernel 内加）。是 [[fused kernel融合算子]] 的实战。TE 的 `LayerNormLinear` 融合 norm+QKV+bias。
 
 ### 8.2 与 transformer engine 集成
 
@@ -261,4 +261,4 @@ Megatron Core 可用 TE 的 `Linear` 层（内部 fused），配合 TP。TE 层�
 ColumnParallelLinear 整理自 Megatron-LM 论文 v1（"Efficient Large-Scale Language Model Training on GPU Clusters"）、`megatron/core/tensor_parallel/layers.py` 源码、`mappings.py`。与 RowParallelLinear 的配对与通信对称见论文。与 DTensor 的对照见 [[DTensor]]。
 
 ---
-相关: [[Tensor Parallel算子]] | [[Tensor Parallel]] | [[RowParallelLinear]] | [[Megatron Core目录与执行链路]] | [[Sequence Parallel]] | [[DTensor]] | [[AllGather]] | [[all-reduce]] | [[reduce-scatter]] | [[HF与Megatron checkpoint转换]] | [[Megatron-LM]] | [[nn.Module]] | [[ATen与c10]] | [[fused kernel]] | [[ncu (Nsight Compute)]]
+相关: [[Tensor Parallel算子]] | [[Tensor Parallel]] | [[RowParallelLinear]] | [[Megatron Core目录与执行链路]] | [[Sequence Parallel]] | [[DTensor]] | [[AllGather]] | [[all-reduce]] | [[reduce-scatter]] | [[HF与Megatron checkpoint转换]] | [[Megatron-LM]] | [[nn.Module]] | [[ATen与c10]] | [[fused kernel融合算子]] | [[ncu (Nsight Compute)]]

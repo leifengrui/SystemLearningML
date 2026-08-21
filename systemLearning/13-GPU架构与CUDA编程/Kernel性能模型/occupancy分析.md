@@ -8,7 +8,11 @@
 
 ## 1. 一句话定义
 
-**occupancy 分析** 是把 [[SM utilization]] 里"occupancy = SM 上活跃 warp 数 / 最大 warp 数"的概念**从纸面公式落到实测与调优**——用 [[ncu (Nsight Compute)]] 测 **achieved occupancy**（运行时实测值，≤ 理论值）、诊断寄存器/shared memory 是否成瓶颈、用 `--maxrregcount`/`__launch_bounds__` 限寄存器以提 occupancy、识别 spill（寄存器溢出到 local memory=HBM，慢）与 warp stall 原因。它不重复 [[SM utilization]] 的原理推导，而是回答"我的 kernel 实测 occupancy 多少、为什么不到理论值、怎么调"。是 CUDA kernel 调优的核心闭环（理论 → 实测 → 调优 → 再实测），与 [[Roofline模型]] 共同构成 kernel 性能诊断的两把尺子。
+**occupancy 分析** 是把 [[SM utilization]] 里
+
+"occupancy = SM 上活跃 warp 数 / 最大 warp 数"
+
+**从纸面公式落到实测与调优**——用 [[ncu (Nsight Compute)]] 测 **achieved occupancy**（运行时实测值，≤ 理论值）、诊断寄存器/shared memory 是否成瓶颈、用 `--maxrregcount`/`__launch_bounds__` 限寄存器以提 occupancy、识别 spill（寄存器溢出到 local memory=HBM，慢）与 warp stall 原因。它不重复 [[SM utilization]] 的原理推导，而是回答"我的 kernel 实测 occupancy 多少、为什么不到理论值、怎么调"。是 CUDA kernel 调优的核心闭环（理论 → 实测 → 调优 → 再实测），与 [[Roofline模型]] 共同构成 kernel 性能诊断的两把尺子。
 
 > [!note] 三句话定位
 > - **是什么**：用 ncu 测 achieved occupancy、定位寄存器/smem 瓶颈、调 launch_bounds 提 occupancy。

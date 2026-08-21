@@ -7,8 +7,9 @@
 
 
 ## 1. 一句话定义
-
-**CUDA stream** 是 GPU 上**按提交顺序串行执行**的命令队列——一个 stream 内的 kernel/memcpy 严格先后执行，**不同 stream 间可并发执行**（计算与计算 overlap、计算与拷贝 overlap）；**CUDA event** 是插在 stream 里的**同步标记点**，用于测量两 event 间耗时或跨 stream 等待（`cudaStreamWaitEvent` 让一个 stream 等另一 stream 的某 event 完成才继续）。stream/event 是把 GPU 的"异步 + 多引擎并发"能力暴露给程序员的接口，是 [[overlap strategy]] 在单机内的最底层实现手段，也是 [[CUDA Graph与graph capture]] 的执行载体。
+![[Pasted image 20260719144646.png]]
+**CUDA stream** 是 GPU 上**按提交顺序串行执行**的命令队列——一个 stream 内的 kernel/memcpy 严格先后执行，**不同 stream 间可并发执行**（计算与计算 overlap、计算与拷贝 overlap）；
+**CUDA event** 是插在 stream 里的**同步标记点**，用于测量两 event 间耗时或跨 stream 等待（`cudaStreamWaitEvent` 让一个 stream 等另一 stream 的某 event 完成才继续）。stream/event 是把 GPU 的"异步 + 多引擎并发"能力暴露给程序员的接口，是 [[overlap strategy]] 在单机内的最底层实现手段，也是 [[CUDA Graph与graph capture]] 的执行载体。
 
 > [!note] 三句话定位
 > - **是什么**：stream = 命令串行队列，event = 同步标记；多 stream 并发，event 做跨流同步/计时。

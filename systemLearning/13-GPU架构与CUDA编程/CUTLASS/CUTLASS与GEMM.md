@@ -16,6 +16,50 @@
 > - **与 Triton 区别**：CUTLASS C++ 模板控制更细（epilogue/流水/double buffer 可手调）但门槛高；Triton Python block-level 易用，多数 op 用 Triton，极致 GEMM/特殊 epilogue 用 CUTLASS。
 
 
+> [!note] 解答：什么是 GEMM？
+> **GEMM** = **GEneral Matrix Multiply**（通用矩阵乘），源自 BLAS（Basic Linear Algebra Subprograms）Level 3 的核心例程 `xGEMM`（按精度分 `SGEMM`/`DGEMM`/`HGEMM`/`HGEMM` 等，前缀 S/D/H/Z 表示 float/double/half/bf16...）。它的标准定义是：
+> 
+> $$ C \;=\; \alpha\, A B \;+\; \beta\, C \qquad A\in\mathbb{R}^{M\times K},\; B\in\mathbb{R}^{K\times N},\; C\in\mathbb{R}^{M\times N} $$
+> 
+> 即"矩阵 A (M×K) 乘矩阵 B (K×N)，加一个缩放后的旧 C，再缩放"。$\alpha,\beta$ 是标量，这就是"**通用**"二字的来源——它不是单纯 $C=AB$，而是带 alpha/beta 的 fused multiply-add 形式，能在一次调用里完成"乘 + 加旧值"，避免多写一次 HBM。当 $\beta=0$ 时退化为普通 $C=AB$，当 $\alpha=1,\beta=0$ 时即最常见的矩阵乘。
+> 
+> ### 为什么 GEMM 是 GPU 计算的"心脏"
+> 
+> | 维度 | 说明 |
+> |---|---|
+> | **FLOP 占比** | LLM 训练/推理 ~70% FLOP 花在 GEMM 上（QKV 投影、$O$ 投影、FFN 两层 MLP、logits 投影）。MoE 的多专家更全是 grouped GEMM（见 [[grouped GEMM]]）。 |
+> | **算术强度** | $\text{FLOP}=2MNK$，$\text{HBM}\approx MK+NK+MN$，$I\approx 2M$（$M$ 大时）→ compute-bound 典范，详见 [[Roofline模型]]。GEMM 跑不到峰值，整个 [[MFU与算术强度]] 就上不去。 |
+> | **硬件加速** | tensor core 就是为 GEMM 设计的：`mma.sync` 一条指令算 $16\times8\times16$ 的 bf16 矩阵乘加，A100 峰值 312 TFLOPS。所有 GPU "快"本质上就是 GEMM 快。 |
+> 
+> ### GEMM 的"三层加速"——正是 CUTLASS 干的事
+> 
+> 朴素 GEMM 直接在 HBM 上算会很慢。要接近峰值必须三层处理，这正是 CUTLASS 把 GEMM 模板化的原因：
+> 
+> 1. **tiling（分块）**：把 $A,B$ 切成 tile 载入 shared memory（smem），让多个 warp 共享复用 → 每 element 只从 HBM 读 1 次，把 $I$ 从 $\sim 1$ 拉到 $\sim 2M$。
+> 2. **double buffer（流水）**：开两份 smem buffer，一份在 load 下一 tile、一份在 compute 当前 tile → $T=\max(T_{\text{load}},T_{\text{compute}})$ 而非求和，性能近翻倍。
+> 3. **epilogue 融合**：把 scale/bias/activation（如 `C=relu(αAB+βC+bias)`）塞进 GEMM 写回阶段，$AB$ 不落 HBM 直接在寄存器算完 → 省 $2MN$ bytes HBM 往返。
+> 
+> 所以 [[CUTLASS与GEMM]] 这个文件名连在一起写，本质是说"CUTLASS 是把 GEMM 做到接近硬件峰值的 C++ 模板库"。读懂 GEMM，才懂 CUTLASS 在优化什么。
+> 
+> ### 代码视角
+> 
+> ```python
+> # 用户日常调的 GEMM：
+> import torch
+> C = torch.mm(A, B)                       # = SGEMM/HGEMM，β=0
+> C = torch.addmm(C, A, B, alpha=0.5, beta=0.1)  # 完整 xGEMM：C=αAB+βC
+> # torch.mm 内部 → cuBLAS（闭源，内核源自 CUTLASS 模板实例）
+> ```
+> 
+> ### 常见误区
+> > - **误区 1**：以为 GEMM 只是 $C=AB$。其实标准 GEMM 带 $\alpha,\beta$，是 fused multiply-add，`addmm` 才是完整形式。
+> > - **误区 2**：混淆 GEMM 与 elementwise/广播乘。GEMM 要求内维 $K$ 做规约（reduce），不是逐元素。BLAS Level 1=elementwise，Level 2=matvec，Level 3=matmat=GEMM。
+> > - **误区 3**：以为 GEMM = cuBLAS。cuBLAS 是闭源库，内部 kernel 多源自 CUTLASS 模板实例；GEMM 是数学操作本身，cuBLAS/CUTLASS/Triton 都是它的实现。
+> > - **误区 4**：把 grouped GEMM 当多次普通 GEMM。grouped 是单 kernel + problem list 调度，省 launch 开销 + 共享 tiling + L2 局部性（见 [[grouped GEMM]]）。
+> 
+> ---
+> **相关**: [[CUTLASS与GEMM]]（本文档即围绕它展开）、[[grouped GEMM]]、[[Roofline模型]]、[[MFU与算术强度]]、[[GPU执行模型]]、[[tensor core]]
+
 ## 2. 为什么需要它（动机与背景）
 
 ### 2.1 GEMM 是 LLM 的计算主体
@@ -65,7 +109,7 @@ A/B 各分 tile 载入 smem，block 内多 warp 共享。**double/triple bufferi
 
 ### 3.3 epilogue 融合
 
-GEMM 后常接 scale + bias + activation（如 `C = act(alpha * AB + beta * C + bias)`）。CUTLASS 的 **epilogue** 把这些融合进 GEMM kernel 的写回阶段，中间结果 $AB+\text{bias}$ 不落 HBM，直接寄存器内算完写一次。这是 [[fused kernel]] 在 GEMM 维度的体现，省一次 HBM 往返，提 $I$（[[Roofline模型]]）。
+GEMM 后常接 scale + bias + activation（如 `C = act(alpha * AB + beta * C + bias)`）。CUTLASS 的 **epilogue** 把这些融合进 GEMM kernel 的写回阶段，中间结果 $AB+\text{bias}$ 不落 HBM，直接寄存器内算完写一次。这是 [[fused kernel融合算子]] 在 GEMM 维度的体现，省一次 HBM 往返，提 $I$（[[Roofline模型]]）。
 
 ### 3.4 data layout 参数
 
@@ -197,7 +241,7 @@ gemm({A,B,C,{M,N,K},alpha,bias});
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: [[GPU执行模型]]（warp/tensor core）、[[GPU内存层级]]（smem tiling/bank/double buffer）、[[Roofline模型]]（GEMM 是 compute-bound 典范）。
-- **下游（应用）**: [[grouped GEMM]]（MoE 的底层）、[[Megatron Core目录与执行链路]]（Column/RowParallel 用 cuBLAS/CUTLASS）、vLLM/SGLang 的 GEMM（大 batch prefill）、[[FP8量化方案]]/[[AWQ]]/[[GPTQ]]（低精度 GEMM）、[[fused kernel]]（epilogue 融合）。
+- **下游（应用）**: [[grouped GEMM]]（MoE 的底层）、[[Megatron Core目录与执行链路]]（Column/RowParallel 用 cuBLAS/CUTLASS）、vLLM/SGLang 的 GEMM（大 batch prefill）、[[FP8量化方案]]/[[AWQ]]/[[GPTQ]]（低精度 GEMM）、[[fused kernel融合算子]]（epilogue 融合）。
 - **对比 / 易混**:
   - **CUTLASS vs cuBLAS**：CUTLASS 开源模板可改，cuBLAS 闭源更黑盒但有时略快（NVIDIA 内部优化）。
   - **CUTLASS vs [[Triton kernel开发|Triton]]**：见 3.9，C++ 模板极致控制 vs Python 易用。
@@ -248,4 +292,4 @@ CUTLASS 的四级层次与 [[GPU内存层级]] 对应：instruction 在 register
 CUTLASS 四级层次与 CuTe 整理自 NVIDIA CUTLASS 文档与 examples，GEMM 性能模型见 [[Roofline模型]] 与 cuBLAS 技术说明，grouped GEMM 见 Megatron-LM 的 MoE 实现。
 
 ---
-相关: [[CUTLASS]] | [[GPU执行模型]] | [[GPU内存层级]] | [[Roofline模型]] | [[occupancy分析]] | [[Triton kernel开发]] | [[fused kernel]] | [[grouped GEMM]] | [[Megatron Core目录与执行链路]] | [[FP8量化方案]] | [[AWQ]] | [[GPTQ]] | [[PyBind11与CMake]]
+相关: [[CUTLASS]] | [[GPU执行模型]] | [[GPU内存层级]] | [[Roofline模型]] | [[occupancy分析]] | [[Triton kernel开发]] | [[fused kernel融合算子]] | [[grouped GEMM]] | [[Megatron Core目录与执行链路]] | [[FP8量化方案]] | [[AWQ]] | [[GPTQ]] | [[PyBind11与CMake]]

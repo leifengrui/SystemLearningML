@@ -8,7 +8,50 @@
 
 ## 1. 一句话定义
 
-**gradient memory（梯度显存）** 是反向传播产生的、**供 optimizer 更新参数用的梯度张量**——每个模型参数对应一个梯度，大小 = 参数大小（同精度）。它是训练显存三大组成之一（[[activation memory|activation]] + [[gradient memory|gradient]] + [[optimizer state memory|optimizer state]]），与 batch 无关（每参数固定 1 梯度），但与精度相关（fp16 减半 vs fp32）。在分布式训练中，gradient 还需 allreduce 同步（[[communication bottleneck]] 的来源），且可分片（[[ZeRO (DeepSpeed)]]-2）。混合精度训练时 gradient 常以 fp16 存（计算）+ fp32 master（精度保真），需区分。
+**gradient memory（梯度显存）** 是反向传播产生的、**供 optimizer 更新参数用的梯度张量**——每个模型参数对应一个梯度，大小 = 参数大小（同精度）。它是训练显存三大组成之一（[[activation memory|activation]] + [[gradient memory|gradient]] + [[optimizer state memory|optimizer state]]），与 batch 无关（每参数固定 1 梯度），但与精度相关（fp16 减半 vs fp32）。在分布式训练中，gradient 还需 allreduce 同步（[[communication bottleneck]] 的来源），且可分片（[[ZeRO (DeepSpeed)]]-2）。
+
+> [!note] 解答：什么是"gradient 常以 fp16 存（计算）+ fp32 master（精度保真），需区分"
+> 
+> 这句话讲的是**混合精度训练里梯度张量不止一份副本**的工程现实。拆成三层来看：
+> 
+> ### 1. 为什么会有"两份"梯度
+> 
+> 混合精度训练的核心矛盾是：
+> 
+> - **算得快** → 想用 fp16/bf16（Tensor Core 加速、显存减半）。
+> - **精度要保** → fp16 的 5 位指数 + 10 位尾数很容易**下溢**（梯度的有效值常在 $10^{-4}\sim10^{-7}$，fp16 能表示的最小正常数是 $5.96\times 10^{-8}$，再小就是 0），一取梯度就被抹零。
+> 
+> 解法是**双轨制**：梯度存两份，一份 fp16 给计算用（快、省显存），一份 fp32 给"保精度累加/更新"用（数值安全）。这就是 "fp16 存（计算）+ fp32 master（精度保真）" 的字面意思。
+> 
+> | 副本 | dtype | 用途 | 何时用 |
+> |---|---|---|---|
+> | **gradient (fp16)** | fp16/bf16 | 反向计算链上的梯度传播、allreduce 聚合 | backward、gradient bucketing、NCCL 通信 |
+> | **master gradient (fp32)** | fp32 | 梯度累加、unscale、clip、喂给 optimizer 算 $m,v$ 和参数更新 | gradient unscale → clip → optimizer.step 前 |
+> 
+> ### 2. 一份还是两份？看实现
+> 
+> "需区分" 三字的真正分量在这里——**到底存几份取决于框架实现**，不能一概而论：
+> 
+> - **PyTorch 原生 AMP（autocast + GradScaler）**：反向用 fp16 算（快），算完后立刻 **unscale** 成 fp32 写进 `.grad`（PyTorch 的 `param.grad` 默认就是 fp32），clip 和 optimizer step 都在 fp32 上做。这种实现下**只有一份 fp32 master gradient**常驻，fp16 那份是反向过程中的临时量、用完即丢，**不长期占显存**。
+> - **Megatron / DeepSpeed 等**：常常**保留 fp16 gradient buffer 用于通信**（bucket view），同时再维护一份 fp32 copy 供 optimizer。这种实现下 7B 模型的 gradient memory 实际是 fp16 14GB + fp32 28GB = **42GB**（如 §4.2 公式 $M_{\text{grad,mixed}}=N_p\cdot 6$）。
+> - **bf16 时代**：bf16 指数位 8 位（同 fp32），**不易下溢**，可以省掉 loss scaling 这一步；但 master gradient 仍常保 fp32，因为累加/optimizer 数值稳定性更好。所以"bf16 就一份"是误区——master 仍可能存 fp32。
+> 
+> 所以本笔记 §2.5 写"gradient memory 可能是 fp16 14GB，也可能是 fp16+fp32=42GB，取决于实现"——这句"需区分"就是让你**别假定它恒等于参数大小**，做显存估算时要查具体框架（[[FSDP]]、[[ZeRO (DeepSpeed)]]、Megatron 的 gradient 配置）。
+> 
+> ### 3. 配套的两个机制
+> 
+> 把"两份副本"运转起来的还有两个动作，常和它一起出现：
+> 
+> - **loss scaling**（[[loss scaling]]）：反向前把 loss 乘一个大的 scale（如 $2^{16}$），让梯度被放大进 fp16 可表示范围，反向算完再 unscale 回 fp32。这是 fp16 训练的标配，bf16 不需要。
+> - **fp32 master weight**（[[mixed precision training]]）：与 master gradient 配对的另一份副本——参数本身也存 fp32 master，optimizer 在 fp32 上更新，前向时再 cast 成 fp16/bf16。所以混合精度训练显存账是 $4P$（fp16 权重+梯度+fp32 master 权重+Adam $m,v$ 各 fp32）。
+> 
+> ### 4. 显存估算里最容易漏的一笔
+> 
+> [[训练显存估计]] 的 $16N$ 公式其实已经把这笔账算进去了（权重 2N fp16 + 梯度 2N fp16 + master 权重 4N fp32 + Adam m/v 8N fp32 = 16N）。但如果你粗心写成"梯度就是参数大小、7B fp16 = 14GB"——这在 fp32 master gradient 实现里会**低估 28GB**，导致 ZeRO 分片卡数算错（少算一张卡就 OOM）。这也是为什么本条特别标注"需区分"。
+> 
+> ### 5. 一句话速记
+> 
+> > fp16 那份是"干活的"（反向计算 + 通信），fp32 master 那份是"记账的"（unscale/clip/累加/喂 optimizer）；到底存几份看框架，PyTorch AMP 只留 fp32 一份、Megatron/DeepSpeed 常留两份、bf16 也不一定能省掉 master。做显存账时**两份都算一遍再下结论**。详见 [[mixed precision training]]、[[loss scaling]]、[[数值类型与精度]]。
 
 > [!note] 三句话定位
 > - **是什么**：反向产生的、供 optimizer 用的梯度，每参数 1 个，大小 = 模型大小。

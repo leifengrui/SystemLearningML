@@ -262,7 +262,7 @@ QLoRA 的 NF4 配 blockwise absmax scale（每 block 一个 fp32 scale）。**�
 
 ### 8.2 FP4 dequant kernel 开销（无原生 GEMM 时）
 
-A100/H100 无 FP4 Tensor Core，NF4/MXFP4 权重推理要 dequant 回 fp16 做 fp16 GEMM。dequant 是额外算子（查码本 + 乘 scale），需 fused kernel（dequant+GEMM 融合，见 [[fused kernel]]）摊销开销。Fast NF4 dequant kernel（arxiv 2026）优化此开销。Blackwell 原生 FP4 GEMM 免此开销。
+A100/H100 无 FP4 Tensor Core，NF4/MXFP4 权重推理要 dequant 回 fp16 做 fp16 GEMM。dequant 是额外算子（查码本 + 乘 scale），需 fused kernel（dequant+GEMM 融合，见 [[fused kernel融合算子]]）摊销开销。Fast NF4 dequant kernel（arxiv 2026）优化此开销。Blackwell 原生 FP4 GEMM 免此开销。
 
 ### 8.3 Blackwell FP4 算力（参考，待核实）
 
@@ -277,4 +277,4 @@ B200 FP4 ~9 PFLOPS vs FP8 ~4.5 PFLOPS（2×），vs bf16 ~2.25 PFLOPS（4×）�
 NF4 整理自 QLoRA 论文（Dettmers et al. 2023, arXiv:2305.14314）、bitsandbytes NF4 codebook、[[FP8量化方案]] 双量化对照。MXFP4 整理自 OCP Microscaling Formats (MX) v1.0 spec（2023）、OpenAI gpt-oss MXFP4 用法、知乎/CSDN MXFP4 vs NVFP4 解析。NVFP4 整理自 NVIDIA Blackwell 架构白皮书、vLLM `--quantization fp4`（NVFP4 W4A）文档与源码。E2M1 码本由 IEEE 754 风格浮点定义推算。算力数字标"待核实"者以 NVIDIA datasheet 为准。与 FP8 递进见 [[FP8量化方案]]。
 
 ---
-相关: [[量化]] | [[AWQ]] | [[GPTQ]] | [[INT8推理]] | [[FP8量化方案]] | [[数值类型与精度]] | [[mixed precision training]] | [[loss scaling]] | [[memory bandwidth]] | [[Roofline模型]] | [[新模型接入]] | [[model runner]] | [[Tensor Parallel]] | [[fused kernel]] | [[sampling throughput]]
+相关: [[量化]] | [[AWQ]] | [[GPTQ]] | [[INT8推理]] | [[FP8量化方案]] | [[数值类型与精度]] | [[mixed precision training]] | [[loss scaling]] | [[memory bandwidth]] | [[Roofline模型]] | [[新模型接入]] | [[model runner]] | [[Tensor Parallel]] | [[fused kernel融合算子]] | [[sampling throughput]]

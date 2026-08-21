@@ -66,7 +66,7 @@ AWQ 支持 **symmetric / asymmetric int4**（带 zero point $z$），per-group �
 
 ### 3.5 weight-only：激活仍 fp16/bf16
 
-**AWQ 只量化权重，激活保持 fp16/bf16 不量化**（W4A16）。原因：① decode 带宽瓶颈在权重读取，量化权重即省带宽；② 激活量化（W4A4/W8A8）需校准激活量化参数且对 outlier 敏感（见 [[INT8推理]] 的 SmoothQuant），weight-only 简单且精度好。计算时 int4 权重先 dequant 回 fp16 再做 fp16 GEMM（dequant + GEMM 融合 kernel，见 [[fused kernel]]）。
+**AWQ 只量化权重，激活保持 fp16/bf16 不量化**（W4A16）。原因：① decode 带宽瓶颈在权重读取，量化权重即省带宽；② 激活量化（W4A4/W8A8）需校准激活量化参数且对 outlier 敏感（见 [[INT8推理]] 的 SmoothQuant），weight-only 简单且精度好。计算时 int4 权重先 dequant 回 fp16 再做 fp16 GEMM（dequant + GEMM 融合 kernel，见 [[fused kernel融合算子]]）。
 
 
 ## 4. 数学原理 / 公式
@@ -227,7 +227,7 @@ python -m vllm.entrypoints.openai.api_server \
 > AWQ 是 **weight-only**（W4A16），激活全程 fp16/bf16 不量化。若要量化激活（省算力）走 [[INT8推理]] W8A8 或 [[FP8量化方案]]。AWQ 省的是 decode **带宽**（权重读取），不是算力。
 
 > [!warning] 误区 5：int4 权重直接做 int4 GEMM
-> 不对。当前 GPU（A100/H100）无 int4 Tensor Core GEMM。AWQ int4 权重先 **dequant 回 fp16** 再做 fp16 GEMM（dequant 与 GEMM 融合成一个 kernel，见 [[fused kernel]]）。省的是**带宽**（int4 读取 4× 少），算力仍是 fp16。Blackwell 才有 FP4 Tensor Core（见 [[FP4与低比特]]）。
+> 不对。当前 GPU（A100/H100）无 int4 Tensor Core GEMM。AWQ int4 权重先 **dequant 回 fp16** 再做 fp16 GEMM（dequant 与 GEMM 融合成一个 kernel，见 [[fused kernel融合算子]]）。省的是**带宽**（int4 读取 4× 少），算力仍是 fp16。Blackwell 才有 FP4 Tensor Core（见 [[FP4与低比特]]）。
 
 > [!tip] 实践：校准数据要代表部署分布
 > AWQ 找显著通道靠校准激活幅值。若校准数据与实际部署输入分布差大（如校准用英文 wiki、部署用中文代码），显著通道判错 → 精度退化。用与部署同分布的校准集（至少 128 样本）。
@@ -240,7 +240,7 @@ python -m vllm.entrypoints.openai.api_server \
 
 ### 8.1 Marlin kernel（AWQ/GPTQ 通用 fast kernel）
 
-AWQ/GPTQ int4 推理的 fastest kernel 是 **Marlin**（vLLM 集成），把 int4 权重解包 + dequant + fp16 GEMM 融合成单 kernel，最大化带宽利用。是 [[fused kernel]] 在量化的应用。老 AWQ-GEMM kernel 慢于 Marlin，新 vLLM 默认 Marlin。
+AWQ/GPTQ int4 推理的 fastest kernel 是 **Marlin**（vLLM 集成），把 int4 权重解包 + dequant + fp16 GEMM 融合成单 kernel，最大化带宽利用。是 [[fused kernel融合算子]] 在量化的应用。老 AWQ-GEMM kernel 慢于 Marlin，新 vLLM 默认 Marlin。
 
 ### 8.2 与 GPTQ 的精度差
 
@@ -251,4 +251,4 @@ GPTQ 二阶补偿在 3-bit（int3）精度优势更明显（int4 两者接近，
 AWQ 整理自 Lin et al. "AWQ: Activation-aware Weight Quantization for LLM Compression and Acceleration"（MIT Han Lab, NeurIPS 2023）、AutoAWQ GitHub、vLLM `--quantization awq` 文档与 `vllm/model_executor/layers/quantization/awq/` 源码、Marlin kernel 论文。与 GPTQ 对照见 [[GPTQ]]。NF4 对照见 [[FP4与低比特]]。
 
 ---
-相关: [[量化]] | [[GPTQ]] | [[INT8推理]] | [[FP4与低比特]] | [[FP8量化方案]] | [[数值类型与精度]] | [[memory bandwidth]] | [[Roofline模型]] | [[新模型接入]] | [[model runner]] | [[Tensor Parallel]] | [[fused kernel]] | [[mixed precision training]] | [[sampling throughput]]
+相关: [[量化]] | [[GPTQ]] | [[INT8推理]] | [[FP4与低比特]] | [[FP8量化方案]] | [[数值类型与精度]] | [[memory bandwidth]] | [[Roofline模型]] | [[新模型接入]] | [[model runner]] | [[Tensor Parallel]] | [[fused kernel融合算子]] | [[mixed precision training]] | [[sampling throughput]]

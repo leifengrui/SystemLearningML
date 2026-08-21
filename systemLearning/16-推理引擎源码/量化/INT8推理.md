@@ -43,7 +43,7 @@ INT8 是定点（8-bit 整数，均匀 256 台阶），参与浮点运算前要 
 
 - **量化对象**：仅权重 int8（per-channel 或 per-group），激活 fp16/bf16。
 - **收益**：权重显存/带宽压 2×（fp16 2B → int8 1B + 元数据）。decode memory-bound，带宽省 2× → decode 吞吐近 2×。
-- **计算**：int8 权重先 dequant 回 fp16 再做 fp16 GEMM（fused dequant+GEMM kernel，见 [[fused kernel]]）。**不**用 int8 Tensor Core（因激活是 fp16）。算力不省，省带宽。
+- **计算**：int8 权重先 dequant 回 fp16 再做 fp16 GEMM（fused dequant+GEMM kernel，见 [[fused kernel融合算子]]）。**不**用 int8 Tensor Core（因激活是 fp16）。算力不省，省带宽。
 - **校准**：静态 per-channel 量化（权重幅值固定，离线算 scale 即可），**不需**校准激活。简单。
 - **精度**：int8 权重 2× 压缩，精度损失小（远好于 int4），几乎无损。
 - **场景**：纯 decode 优化、边缘/低带宽硬件、不愿校准激活的简单部署。
@@ -67,7 +67,7 @@ LLM 激活（尤其 FFN/attention 后、某些层）有 outlier：少数通道�
 
 ### 3.4 INT8 GEMM（int8 矩阵乘）
 
-W8A8 的核心算子是 **INT8 Tensor Core GEMM**：$C_{int32} = A_{int8}\times B_{int8}$（累加用 int32 防溢），输出乘 $\Delta_A\Delta_B$ dequant 回 fp16。cuBLAS/cutlass 提供 `int8Gemm`。A100/H100 Tensor Core 原生支持 int8。是 [[fused kernel]]（dequant+GEMM 融合）的典型。注意 int8 GEMM 要处理 zero-point（asymmetric）或 symmetric。
+W8A8 的核心算子是 **INT8 Tensor Core GEMM**：$C_{int32} = A_{int8}\times B_{int8}$（累加用 int32 防溢），输出乘 $\Delta_A\Delta_B$ dequant 回 fp16。cuBLAS/cutlass 提供 `int8Gemm`。A100/H100 Tensor Core 原生支持 int8。是 [[fused kernel融合算子]]（dequant+GEMM 融合）的典型。注意 int8 GEMM 要处理 zero-point（asymmetric）或 symmetric。
 
 ### 3.5 与 FP8 的关系
 
@@ -243,4 +243,4 @@ A100：bf16 312 TFLOPS，int8 624 TOPS（2×）。H100 SXM5：bf16/fp16 ~1979 TF
 INT8 推理整理自 SmoothQuant（Xiao et al. 2022）、TensorRT-LLM INT8/SmoothQuant 文档、vLLM `--quantization` 与 llm-compressor `scheme="W8A8"`、cuBLAS int8 GEMM、[[FP8量化方案]] 对照。算力数字来自 NVIDIA A100/H100 datasheet（标"待核实"者以官方为准）。
 
 ---
-相关: [[量化]] | [[AWQ]] | [[GPTQ]] | [[FP4与低比特]] | [[FP8量化方案]] | [[数值类型与精度]] | [[mixed precision training]] | [[memory bandwidth]] | [[Roofline模型]] | [[新模型接入]] | [[model runner]] | [[Tensor Parallel]] | [[fused kernel]] | [[sampling throughput]] | [[loss scaling]] | [[KV block manager]]
+相关: [[量化]] | [[AWQ]] | [[GPTQ]] | [[FP4与低比特]] | [[FP8量化方案]] | [[数值类型与精度]] | [[mixed precision training]] | [[memory bandwidth]] | [[Roofline模型]] | [[新模型接入]] | [[model runner]] | [[Tensor Parallel]] | [[fused kernel融合算子]] | [[sampling throughput]] | [[loss scaling]] | [[KV block manager]]

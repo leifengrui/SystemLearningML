@@ -3,16 +3,16 @@
 > **所属章节**: [[Compiler组件]]
 > **所属模块**: [[14-PyTorch内核与编译系统]]
 > **别名**: Inductor / torch._inductor / codegen backend / Triton codegen / C++ codegen / fusion / epilogue fusion / autotune
-> **难度**: 高（需懂 [[torch.compile]] + [[AOTAutograd]] + [[Triton kernel开发]] + [[fused kernel]]）
+> **难度**: 高（需懂 [[torch.compile]] + [[AOTAutograd]] + [[Triton kernel开发]] + [[fused kernel融合算子]]）
 
 
 ## 1. 一句话定义
 
-**Inductor** 是 `torch.compile` 流水线的**第三段（最终 codegen 后端）**——接 [[AOTAutograd]] 输出的 **joint FX Graph**（前向+反向，已 decomposition + functionalization），做**融合分析**（把相邻 elementwise/norm/reduction op 分组，同组融合成一个 kernel）、**epilogue 融合**（GEMM 后接 bias/activation 在寄存器接不落 HBM）、**codegen**（GPU 生成 [[Triton kernel开发]] 代码、CPU 生成 C++ 代码）、可选 **autotune**（试多 config 选最优），输出编译后的 fused kernel 供运行时调用。它是 compile 提速的**实际执行者**——Dynamo/AOTAutograd 出图，Inductor 把图变成优化 kernel。`max-autotune` 模式让它试多 tile/config，`reduce-overhead` 模式让它叠加 [[CUDA Graph与graph capture]]。是 PyTorch 2.0+ 自动 [[fused kernel]] 的核心引擎。
+**Inductor** 是 `torch.compile` 流水线的**第三段（最终 codegen 后端）**——接 [[AOTAutograd]] 输出的 **joint FX Graph**（前向+反向，已 decomposition + functionalization），做**融合分析**（把相邻 elementwise/norm/reduction op 分组，同组融合成一个 kernel）、**epilogue 融合**（GEMM 后接 bias/activation 在寄存器接不落 HBM）、**codegen**（GPU 生成 [[Triton kernel开发]] 代码、CPU 生成 C++ 代码）、可选 **autotune**（试多 config 选最优），输出编译后的 fused kernel 供运行时调用。它是 compile 提速的**实际执行者**——Dynamo/AOTAutograd 出图，Inductor 把图变成优化 kernel。`max-autotune` 模式让它试多 tile/config，`reduce-overhead` 模式让它叠加 [[CUDA Graph与graph capture]]。是 PyTorch 2.0+ 自动 [[fused kernel融合算子]] 的核心引擎。
 
 > [!note] 三句话定位
 > - **是什么**：compile 第三段，接 joint graph 融合 + codegen 成 Triton/C++ kernel。
-> - **为什么**：图的 op 要变成能跑的优化 kernel——融合减 HBM 往返（[[fused kernel]]）、Triton codegen 跨 GPU、autotune 选最优 config。
+> - **为什么**：图的 op 要变成能跑的优化 kernel——融合减 HBM 往返（[[fused kernel融合算子]]）、Triton codegen 跨 GPU、autotune 选最优 config。
 > - **与 [[Triton kernel开发]] 关系**：Inductor 是 Triton 的最大消费者——它自动生成 Triton 代码（elementwise/norm/reduction），用户无需手写；GEMM/attention 走专门 kernel（cuBLAS/FlashAttention）+ epilogue 融合。
 
 
@@ -24,7 +24,7 @@ Dynamo 出 FX Graph（op 级 IR），AOTAutograd 加反向 + decomposition + fun
 
 ### 2.2 融合是核心收益
 
-eager 模式逐 op 走 dispatcher，相邻 elementwise op 各自 HBM 往返（[[fused kernel]] 2.1）。Inductor 把相邻 elementwise/norm 分组融合成一个 kernel——中间结果在 register/smem 传递不落 HBM，提 $I$（[[Roofline模型]]）。是 compile 提 [[MFU与算术强度]] 的实际手段。
+eager 模式逐 op 走 dispatcher，相邻 elementwise op 各自 HBM 往返（[[fused kernel融合算子]] 2.1）。Inductor 把相邻 elementwise/norm 分组融合成一个 kernel——中间结果在 register/smem 传递不落 HBM，提 $I$（[[Roofline模型]]）。是 compile 提 [[MFU与算术强度]] 的实际手段。
 
 ### 2.3 Triton 作为 GPU codegen 目标
 
@@ -61,7 +61,7 @@ Inductor 遍历 joint graph，按融合规则分组：
 | attention | 低（专门） | 走 FlashAttention 等 |
 | broadcast | 中 | 与 elementwise 融合（带 broadcast） |
 
-融合组的 op 在 register/smem 传递中间值，不落 HBM。是 [[fused kernel]] 的自动化。
+融合组的 op 在 register/smem 传递中间值，不落 HBM。是 [[fused kernel融合算子]] 的自动化。
 
 ### 3.3 Triton codegen
 
@@ -134,7 +134,7 @@ Inductor 主导 elementwise/norm/reduction 融合，GEMM/attention 走专门 ker
 
 ### 4.1 融合的 byte 收益
 
-$k$ 个相邻 elementwise op 不融合：HBM $\sim 2kN$ byte。融合：$\sim 2N$ byte。省 $k\times$（[[fused kernel]] 4.1）。$I$ 升 $k$ 倍，从 memory-bound 移向 compute-bound。
+$k$ 个相邻 elementwise op 不融合：HBM $\sim 2kN$ byte。融合：$\sim 2N$ byte。省 $k\times$（[[fused kernel融合算子]] 4.1）。$I$ 升 $k$ 倍，从 memory-bound 移向 compute-bound。
 
 ### 4.2 epilogue 的 $I$ 提升
 
@@ -199,7 +199,7 @@ def f(x): return my_custom_op(x)   # 若未在 Inductor 注册 codegen, 走 disp
 
 ## 6. 与其他知识点的关系
 
-- **上游（依赖）**: [[AOTAutograd]]（输入 joint FX Graph）、[[fused kernel]]（融合原理）、[[Roofline模型]]（融合提 $I$）、[[Triton kernel开发]]（GPU codegen 目标）、[[CUTLASS与GEMM]]（epilogue 融合借鉴）、[[kernel launch overhead]]（reduce-overhead 压 launch）。
+- **上游（依赖）**: [[AOTAutograd]]（输入 joint FX Graph）、[[fused kernel融合算子]]（融合原理）、[[Roofline模型]]（融合提 $I$）、[[Triton kernel开发]]（GPU codegen 目标）、[[CUTLASS与GEMM]]（epilogue 融合借鉴）、[[kernel launch overhead]]（reduce-overhead 压 launch）。
 - **下游（应用）**: [[torch.compile]]（Inductor 是其后端）、[[CUDA Graph与graph capture]]（reduce-overhead 集成）、[[SM utilization]]/[[MFU与算术强度]]（融合提 MFU）、[[activation memory]]（saved tensors 决策）、[[Custom C++ CUDA Operator]]（未注册的 fallback dispatcher）、[[dynamic shape]]（shape 变重 codegen）。
 - **对比 / 易混**:
   - **Inductor vs [[Triton kernel开发]]**：Inductor 自动生成 Triton（elementwise/norm/reduction）；手写 Triton 用于 attention/GEMM 等复杂 kernel。Inductor 是 Triton 的最大消费者，两者互补。
@@ -255,4 +255,4 @@ FSDP2 的 DTensor op（[[DTensor]]）可被 Inductor codegen（生成 DTensor-aw
 Inductor 整理自 PyTorch dev docs "TorchInductor"、`torch/_inductor/` 源码、Inductor tutorial。融合规则/epilogue/autotune 见 `torch/_inductor/fx_passes/` 与 `torch/_inductor/codegen/`。
 
 ---
-相关: [[Compiler组件]] | [[torch.compile]] | [[TorchDynamo]] | [[AOTAutograd]] | [[Triton kernel开发]] | [[CUTLASS与GEMM]] | [[fused kernel]] | [[Roofline模型]] | [[kernel launch overhead]] | [[CUDA Graph与graph capture]] | [[SM utilization]] | [[MFU与算术强度]] | [[activation memory]] | [[Custom C++ CUDA Operator]] | [[dynamic shape]] | [[训推不一致]] | [[FSDP2]] | [[DTensor]]
+相关: [[Compiler组件]] | [[torch.compile]] | [[TorchDynamo]] | [[AOTAutograd]] | [[Triton kernel开发]] | [[CUTLASS与GEMM]] | [[fused kernel融合算子]] | [[Roofline模型]] | [[kernel launch overhead]] | [[CUDA Graph与graph capture]] | [[SM utilization]] | [[MFU与算术强度]] | [[activation memory]] | [[Custom C++ CUDA Operator]] | [[dynamic shape]] | [[训推不一致]] | [[FSDP2]] | [[DTensor]]

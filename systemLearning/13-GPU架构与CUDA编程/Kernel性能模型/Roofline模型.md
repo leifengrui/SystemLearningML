@@ -7,6 +7,7 @@
 
 
 ## 1. 一句话定义
+![[Pasted image 20260719163119.png]]
 
 **Roofline 模型** 是用一张图判定一个 kernel 在某 GPU 上能跑多快的性能模型——横轴是**算术强度** $I$（每读 1 byte 内存做多少 FLOP，单位 FLOP/byte），纵轴是**可达算力**（FLOP/s），曲线由两段"屋顶"构成：低 $I$ 时受**内存带宽**限（$\text{FLOP/s} = \text{带宽}\times I$，斜线段，memory-bound），高 $I$ 时受**峰值算力**限（水平段，compute-bound），转折点叫 **ridge point** $R = \text{峰值}/\text{带宽}$。它一句话回答"我的 kernel 是 compute-bound 还是 memory-bound、瓶颈在哪"，是 kernel 优化的第一步诊断，也是 [[MFU与算术强度]] 在 kernel 维度的物理依据。
 
@@ -186,7 +187,7 @@ for m in [128, 4096, 16384]:
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: [[GPU内存层级]]（带宽的物理来源）、GPU 硬件规格（峰值/带宽）、[[GPU执行模型]]（occupancy/访存模式影响 $I$）。
-- **下游（应用）**: [[MFU与算术强度]]（宏观模型 MFU 的依据）、[[SM utilization]]/[[occupancy分析]]（occupancy 与 bound 的正交）、[[FlashAttention]]（tiling 提 $I$ 的典范）、[[fused kernel]]（融合减 byte 提 $I$）、[[compute bottleneck]]/[[memory bottleneck]]/[[communication bottleneck]]（瓶颈三分类）、[[memory bandwidth]]（带宽利用率）、[[ncu (Nsight Compute)]]（roofline 可视化工具）、[[alpha-beta性能模型]]（通信的 roofline 类比）。
+- **下游（应用）**: [[MFU与算术强度]]（宏观模型 MFU 的依据）、[[SM utilization]]/[[occupancy分析]]（occupancy 与 bound 的正交）、[[FlashAttention]]（tiling 提 $I$ 的典范）、[[fused kernel融合算子]]（融合减 byte 提 $I$）、[[compute bottleneck]]/[[memory bottleneck]]/[[communication bottleneck]]（瓶颈三分类）、[[memory bandwidth]]（带宽利用率）、[[ncu (Nsight Compute)]]（roofline 可视化工具）、[[alpha-beta性能模型]]（通信的 roofline 类比）。
 - **对比 / 易混**:
   - **Roofline vs [[MFU与算术强度|MFU]]**：Roofline 是 kernel/GPU 视角判瓶颈；MFU 是模型视角算利用率。公式同源。
   - **compute-bound vs memory-bound vs communication-bound**：算力、HBM 带宽、NVLink 带宽三类瓶颈，roofline 主要判前两类，通信 bound 用 alpha-beta。
@@ -210,7 +211,7 @@ for m in [128, 4096, 16384]:
 > roofline 是上限模型，实际 kernel 有 occupancy、合并、divergence 等损失，$\eta < 1$。roofline 给方向（哪 bound），不给精确数值。精确看 ncu 实测。
 
 > [!warning] 误区 6：忽略融合算子对 $I$ 的提升
-> [[fused kernel]] 把多个小算子合成一个，中间结果不落 HBM → 总 byte 大降 → $I$ 升 → 从 memory-bound 移向 compute-bound。是提 MFU 的关键手段，不是只省 launch。
+> [[fused kernel融合算子]] 把多个小算子合成一个，中间结果不落 HBM → 总 byte 大降 → $I$ 升 → 从 memory-bound 移向 compute-bound。是提 MFU 的关键手段，不是只省 launch。
 
 
 ## 8. 延伸细节
@@ -236,4 +237,4 @@ H100 fp8 峰值 1979 TFLOPs（bf16 的 2×），但带宽不变 → $R$ 翻倍 �
 Roofline 模型整理自 Williams et al. "Roofline: An Insightful Visual Performance Model" (2009)，GPU 规格见 NVIDIA A100/H100/B200 whitepaper，与 [[MFU与算术强度]] 互补。
 
 ---
-相关: [[Kernel性能模型]] | [[GPU内存层级]] | [[MFU与算术强度]] | [[SM utilization]] | [[occupancy分析]] | [[FlashAttention]] | [[fused kernel]] | [[compute bottleneck]] | [[memory bottleneck]] | [[memory bandwidth]] | [[ncu (Nsight Compute)]] | [[alpha-beta性能模型]]
+相关: [[Kernel性能模型]] | [[GPU内存层级]] | [[MFU与算术强度]] | [[SM utilization]] | [[occupancy分析]] | [[FlashAttention]] | [[fused kernel融合算子]] | [[compute bottleneck]] | [[memory bottleneck]] | [[memory bandwidth]] | [[ncu (Nsight Compute)]] | [[alpha-beta性能模型]]

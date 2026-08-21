@@ -150,6 +150,7 @@ $$\text{util} = \frac{\sum_i \lceil L_i / B \rceil \cdot B}{\text{KV pool 总 bl
 $B$=block_size（16）。碎片仅 $\lceil \rceil$ 的尾部（$< B$ token，最多 15），可忽略。显存利用 ~90%。
 
 ### 4.3 在线 softmax（数值稳定）
+【user】在线体现在哪里？没看明白。
 
 传统 attention：$\text{attn}(Q, K, V) = \text{softmax}(QK^T / \sqrt{d}) V$，需先算全局 max $\max_j (QK_j)$。
 
@@ -170,20 +171,6 @@ $2$=K+V，$L$=block_size，$n_{\text{kv}}$=KV head 数（GQA 少），$d_h$=head
 
 ## 5. 代码示例（可选）
 
-### 5.1 vLLM PagedAttention 调用
-
-```python
-from vllm.attention.backends.flash_attn import FlashAttentionBackend
-# vLLM 内部用 PagedAttention kernel (block-level)
-# attention 输入: Q, K, V, block_table, seq_len
-output = paged_attention(
-    query=q,                    # [num_tokens, num_heads, head_dim]
-    key_cache=KV_pool.key,      # [num_blocks, block_size, num_kv_heads, head_dim]
-    value_cache=KV_pool.value,
-    block_table=block_table,    # [num_requests, max_num_blocks] 逻辑->物理
-    seq_lens=seq_lens,
-)
-```
 
 ### 5.2 block table 结构
 

@@ -8,7 +8,8 @@
 
 ## 1. 一句话定义
 
-**异步 memcpy** 是经 GPU 的 **copy engine** 在后台执行 H2D/D2H（host↔device）数据拷贝、与 compute engine 的 kernel 并发的机制；要让 copy engine 真正 DMA 直传，host 端内存必须是 **pinned memory（页锁定内存）**——OS 不允许换出、物理地址固定、可直接被 GPU 的 DMA 引擎寻址。两者配合（pinned host 内存 + `cudaMemcpyAsync` 入非默认 stream）才能实现"计算与传输 overlap"，把 CPU↔GPU 搬运藏于计算之内，是 data loader、KV cache offload、checkpoint 保存的底层加速手段。它是 [[CUDA stream与event]] 在数据搬运维度的典型应用。
+**异步 memcpy** 是经 GPU 的 **copy engine** 在后台执行 H2D/D2H（host↔device）数据拷贝、与 compute engine 的 kernel 并发的机制；要让 copy engine 真正 DMA 直传，host 端内存必须是 **pinned memory（页锁定内存）**——OS 不允许换出、物理地址固定、可直接被 GPU 的 DMA 引擎寻址。
+两者配合（pinned host 内存 + `cudaMemcpyAsync` 入非默认 stream）才能实现"计算与传输 overlap"，把 CPU↔GPU 搬运藏于计算之内，是 data loader、KV cache offload、checkpoint 保存的底层加速手段。它是 [[CUDA stream与event]] 在数据搬运维度的典型应用。
 
 > [!note] 三句话定位
 > - **是什么**：pinned memory = 锁页 host 内存可被 GPU DMA 直传；async memcpy = 后台 copy engine 拷贝，与计算并发。
@@ -36,6 +37,71 @@ CPU 普通内存是 **pageable**（可被 OS 换出到 swap，物理地址不固
 ### 2.3 训练/推理的真实场景
 
 - **data loader**：pin_memory=True（PyTorch DataLoader）→ batch 落 pinned → `non_blocking=True` 的 `.to('cuda')` 走 async memcpy 与上一个 batch 的 forward 并发。
+- > [!note] 解答：data loader 是什么？
+  > **一句话**：**DataLoader（数据加载器）** 是 PyTorch（以及 JAX/TensorFlow 等框架对应组件）提供的**训练数据迭代器**——它把一个 `Dataset`（"全部训练样本在哪、怎么取一条"的抽象）按你指定的 batch_size、乱序规则、并发 worker 数等，**自动切成一批批 batch 喂给训练循环**，并顺便处理 shuffle、prefetch、pin_memory 这些与性能强相关的杂活。它是"原始数据 → GPU 上可直接前向的 tensor batch"这条管线的主控者。
+  >
+  > ### 一、它要解决的问题
+  > 训练 1 个 epoch 要逐条取样本、拼成 batch、搬到 GPU。如果主循环里现取现搬：
+  > - 取样本（读盘 / 解码图片 / tokenize 文本）→ 几十 ms；
+  > - 拼 batch → 几 μs；
+  > - 拷到 GPU → 几 ms；
+  > - 前向反向 → 几百 ms。
+  >
+  > 如果串行做，前两步的几十 ms 会**叠在 GPU 计算之上**，吞吐被拖累。DataLoader 的核心职责就是**把"取样本 + 拼 batch + 拷到 GPU"放到后台 worker 提前做**，让 GPU 算上一个 batch 时 CPU 端已经在准备下一个 batch，藏数据准备延迟于计算之内（这正是 §2.2 讲的 pinned+async overlap 的上游）。
+  >
+  > ### 二、PyTorch DataLoader 的关键参数
+  >
+  > | 参数 | 作用 | 典型值 | 与本笔记关联 |
+  > |---|---|---|---|
+  > | `dataset` | 样本源（map-style 索引 / iterable 流式） | 自定义 Dataset / HuggingFace `datasets` | — |
+  > | `batch_size` | 每批多少样本 | 8-4096 看 GPU 显存 | — |
+  > | `shuffle` | 每 epoch 是否打乱顺序 | True（train）/ False（eval） | 防止 batch 内分布漂移 |
+  > | `num_workers` | **后台进程数**并行取样本 | 4-16 | 多进程 prefetch，是"藏取样本延迟"的主力 |
+  > | `pin_memory=True` | 把 batch 张量分配在 **pinned host 内存** | True（生产默认） | **本笔记主题**——让 `non_blocking=True` 的 `.to('cuda')` 真 async |
+  > | `drop_last` | 不满 batch 的尾巴丢掉 | True（train，避免 OOM 与 BN 统计抖） | — |
+  > | `collate_fn` | 把多条样本拼成 batch 张量的函数 | 默认 stack，可自定义（pad sequence） | LLM 训练里常用自定义 collate 做 padding |
+  > | `prefetch_factor` | 每 worker 预取几批 | 2（默认） | 多级流水深度 |
+  >
+  > ### 三、它和本笔记（pinned + async memcpy）的关系
+  > DataLoader 是 pinned+async 这套机制的**用户层入口**：
+  >
+  > ```
+  > Dataset → worker 进程取样本+collate → pin_memory=True 把 batch 落 pinned host
+  >            → 主进程拿到 batch → x.to('cuda', non_blocking=True)
+  >            → cudaMemcpyAsync 入 copy engine stream
+  >            → 与上一个 batch 的 forward（compute engine）并发
+  > ```
+  >
+  > 三个机制叠在一起才完整：
+  > 1. **`num_workers>0`**：多进程后台 prefetch，藏"读盘+解码+collate"延迟；
+  > 2. **`pin_memory=True`**：batch 落 pinned，让 DMA 直传一跳（不走 staging 两跳）；
+  > 3. **`.to('cuda', non_blocking=True)`**：async memcpy 入非默认 stream，藏"H2D 搬运"延迟。
+  >
+  > 缺任一个都会拖累：
+  > - 没 worker：取样本串行，GPU 等 CPU 读盘；
+  > - 没 pin_memory：`non_blocking=True` 退回 staging 两跳，且可能阻塞；
+  > - 没 non_blocking：`.to()` 同步阻塞 CPU，无法与 forward 并发。
+  >
+  > ### 四、常见误区
+  > - ❌ "pin_memory=True 就一定快"——若 num_workers=0，主进程串行取样本，pin 也救不回来；要快必须 worker + pin + non_blocking 三件套。
+  > - ❌ "num_workers 越多越好"——每个 worker 都吃内存+pin 一批，多了挤爆 RAM / 触发 swap（与 §4.4 pinned 占用约束冲突）。一般 4-8 够，CPU 核数附近。
+  > - ❌ "DataLoader 只管取数据"——它还做 shuffle（每 epoch 重排）、batch 拼装（collate）、padding、分布式采样（[[DistributedSampler]] 把数据按 rank 切片避免重复），是训练数据管线的总指挥。
+  > - ❌ "推理不需要 DataLoader"——批量推理也用（vLLM 的 batch scheduler、Triton 的 infer DataLoader），只是 shuffle 关掉、pin_memory 仍开。
+  >
+  > ### 五、LLM 训练里它的位置
+  > LLM 预训练/微调的数据管线通常是：
+  > ```
+  > 文本语料（Arrow/Parquet 分片）→ tokenize（缓存或在线）→ IterableDataset
+  >   → DataLoader(num_workers=8, pin_memory=True, collate_fn=pad_to_max_len)
+  >   → batch 落 pinned → non_blocking .to('cuda')
+  >   → 与上一 batch forward 并发
+  > ```
+  > 大模型数据吞吐（tokens/s）常受 data pipeline 限， worker 数、prefetch 深度、是否用 [[WebDataset]]/`IterableDataset` 流式读、是否 mmap 大文件都影响 GPU 利用率——这条管线 bottleneck 时 GPU 利用率会从 95% 掉到 60%。`pin_memory=True` 是其中**和 GPU 直连的那一环**，所以本笔记把它当作典型应用。
+  >
+  > ### 六、一句话总结
+  > > DataLoader = 把 Dataset 按 batch/shuffle/worker/pin_memory 组织起来喂给训练循环的迭代器；它把"取样本+拼 batch+拷到 GPU"藏到后台与 GPU 计算并发，是 pinned+async memcpy 这套机制的用户层入口。生产三件套：`num_workers>0` + `pin_memory=True` + `.to('cuda', non_blocking=True)`。
+  >
+  > 详见本笔记 §2.3 训练/推理真实场景、§3.4 PyTorch 里的用法、§5.2 代码示例。关联 [[CUDA stream与event]]、[[overlap strategy]]、[[DistributedSampler]]、[[WebDataset]]、[[RL权重同步]]（数据/权重搬运的另一场景）。
 - **KV cache swap**：vLLM 把 KV cache 换到 CPU 再换回，靠 pinned + async（见 [[cache eviction与swap offload]]）。
 - **checkpoint 保存**：把 weight 从 GPU 拷到 pinned host 再写盘，用 async 减训练阻塞（见 [[async distributed checkpoint]]）。
 - **parameter server / weight sync**：[[RL权重同步]] 跨设备传权重用 pinned + async。

@@ -8,7 +8,7 @@
 
 ## 1. 一句话定义
 
-**`torch.compile`** 是 PyTorch 2.0 引入的 **JIT（即时）编译入口**——`@torch.compile` 装饰函数或 `model.compile()` 后，PyTorch 在**首次调用时**把该函数的 Python 执行**追踪（trace）成静态计算图**，经 [[TorchDynamo]]（Python 字节码追踪 + guard）→ [[AOTAutograd]]（前向+反向 joint 分解）→ [[Inductor]]（codegen 成 [[Triton kernel开发]]/C++ fused kernel）三段编译流水线，生成优化的 fused kernel 跑后续调用。它提供**三种模式**：`default`（基础融合）、`reduce-overhead`（叠加 [[CUDA Graph与graph capture]] 压 launch）、`max-autotune`（叠加 autotune 选最优 tile/config）。收益是**减 [[kernel launch overhead]] + [[fused kernel]] 减 HBM 往返 + autotune 选最优 config**，代价是**首次编译开销（秒~分钟）+ 编译缓存 + 动态 shape 触发重编译**。它是 2024+ PyTorch 提速的主线 API，取代了 `torch.jit.script`/`torch.jit.trace`（遗留）。
+**`torch.compile`** 是 PyTorch 2.0 引入的 **JIT（即时）编译入口**——`@torch.compile` 装饰函数或 `model.compile()` 后，PyTorch 在**首次调用时**把该函数的 Python 执行**追踪（trace）成静态计算图**，经 [[TorchDynamo]]（Python 字节码追踪 + guard）→ [[AOTAutograd]]（前向+反向 joint 分解）→ [[Inductor]]（codegen 成 [[Triton kernel开发]]/C++ fused kernel）三段编译流水线，生成优化的 fused kernel 跑后续调用。它提供**三种模式**：`default`（基础融合）、`reduce-overhead`（叠加 [[CUDA Graph与graph capture]] 压 launch）、`max-autotune`（叠加 autotune 选最优 tile/config）。收益是**减 [[kernel launch overhead]] + [[fused kernel融合算子]] 减 HBM 往返 + autotune 选最优 config**，代价是**首次编译开销（秒~分钟）+ 编译缓存 + 动态 shape 触发重编译**。它是 2024+ PyTorch 提速的主线 API，取代了 `torch.jit.script`/`torch.jit.trace`（遗留）。
 
 > [!note] 三句话定位
 > - **是什么**：JIT 编译入口，把 Python 函数 trace 成图，经 Dynamo→AOTAutograd→Inductor 生成 fused kernel。
@@ -21,8 +21,8 @@
 ### 2.1 eager 模式的浪费
 
 eager 模式（默认）逐 op 执行：Python 调 `at::add` → [[Dispatcher]] 路由 → kernel launch → HBM 往返 → 下一个 op。问题：
-- **[[kernel launch overhead]]**：每 op ~5 μs CPU launch，小 op 串时 launch 主导（见 [[fused kernel]] 2.1）。
-- **[[fused kernel]] 缺失**：相邻 elementwise/norm op 各自 HBM 往返，中间结果落 HBM（$I$ 低，见 [[Roofline模型]]）。
+- **[[kernel launch overhead]]**：每 op ~5 μs CPU launch，小 op 串时 launch 主导（见 [[fused kernel融合算子]] 2.1）。
+- **[[fused kernel融合算子]] 缺失**：相邻 elementwise/norm op 各自 HBM 往返，中间结果落 HBM（$I$ 低，见 [[Roofline模型]]）。
 - **Python/dispatcher 开销**：每 op Python 解释 + dispatcher 路由 ~几十 ns~μs。
 
 大网络的 forward 有上千 op，这些开销累积可观。compile 一次性把整段融合 + 去 Python/dispatcher。
@@ -84,7 +84,7 @@ Dynamo 遇不支持的 Python 结构（如 `print`、不支持的 builtin、副�
 
 ### 3.5 Inductor 的融合
 
-Inductor 把 graph 里相邻的 elementwise/norm/reduction op 融合成一个 [[Triton kernel开发]] kernel（GPU）或 C++ kernel（CPU）。中间结果在 register/smem 传递不落 HBM（见 [[fused kernel]]）。GEMM/attention 走专门 kernel（cuBLAS/FlashAttention）+ epilogue 融合。是 compile 提速的核心。
+Inductor 把 graph 里相邻的 elementwise/norm/reduction op 融合成一个 [[Triton kernel开发]] kernel（GPU）或 C++ kernel（CPU）。中间结果在 register/smem 传递不落 HBM（见 [[fused kernel融合算子]]）。GEMM/attention 走专门 kernel（cuBLAS/FlashAttention）+ epilogue 融合。是 compile 提速的核心。
 
 ### 3.6 reduce-overhead 与 CUDA Graph
 
@@ -190,13 +190,13 @@ for L in [10, 20, 30]:        # 不同 shape
 
 ## 6. 与其他知识点的关系
 
-- **上游（依赖）**: [[Dispatcher]]（compile 仍走 dispatcher，但融合后 op 数减）、[[kernel launch overhead]]（compile + reduce-overhead 压 launch）、[[fused kernel]]（Inductor 融合的原理）、[[Roofline模型]]（融合提 $I$）。
+- **上游（依赖）**: [[Dispatcher]]（compile 仍走 dispatcher，但融合后 op 数减）、[[kernel launch overhead]]（compile + reduce-overhead 压 launch）、[[fused kernel融合算子]]（Inductor 融合的原理）、[[Roofline模型]]（融合提 $I$）。
 - **下游（应用）**: [[TorchDynamo]]（trace + guard）、[[AOTAutograd]]（joint 分解）、[[Inductor]]（codegen）、[[graph break]]（不支持的回退）、[[dynamic shape]]（shape 变的重编译）、[[CUDA Graph与graph capture]]（reduce-overhead 模式）、[[Custom C++ CUDA Operator]]（注册的 op 才 compile-friendly）、[[SM utilization]]/[[MFU与算术强度]]（compile 提 MFU 的手段）、[[训练显存估计]]（compile 改变 activation 与 kernel 数）。
 - **对比 / 易混**:
   - **torch.compile vs eager**：eager 逐 op 走 dispatcher + Python；compile 融合 + 去 dispatcher + 去 Python。compile 失败回退 eager。
   - **torch.compile vs `torch.jit.script`**：compile 装饰任意 Python、自动 trace、graph break 安全；jit.script 需手写、限制语法、不自动融合。compile 是 2.0+ 主线。
   - **torch.compile vs [[CUDA Graph与graph capture]]**：compile 是编译（融合 + codegen）；CUDA Graph 是 kernel 序列捕获 replay（压 launch）。`reduce-overhead` 模式叠加两者。
-  - **torch.compile vs [[fused kernel]]**：fused kernel 是原理（多 op 合一）；torch.compile 是自动融合的入口（Inductor 实现）。手写 fused kernel 仍在关键路径用。
+  - **torch.compile vs [[fused kernel融合算子]]**：fused kernel 是原理（多 op 合一）；torch.compile 是自动融合的入口（Inductor 实现）。手写 fused kernel 仍在关键路径用。
 
 
 ## 7. 常见误区与易错点
@@ -246,4 +246,4 @@ compile 减 byte 提 $I$ → 提 MFU，是 MFU 提升手段之首（见 [[MFU与
 torch.compile 整理自 PyTorch 2.x dev docs "torch.compile"、PEP-style 设计文档、Inductor tutorial。三模式与 backend 见 `torch._inductor.config`。graph break/dynamic shape 见 [[TorchDynamo]]/[[graph break]]/[[dynamic shape]]。
 
 ---
-相关: [[torch.compile]] | [[TorchDynamo]] | [[AOTAutograd]] | [[Inductor]] | [[graph break]] | [[dynamic shape]] | [[fused kernel]] | [[kernel launch overhead]] | [[CUDA Graph与graph capture]] | [[Roofline模型]] | [[SM utilization]] | [[MFU与算术强度]] | [[Custom C++ CUDA Operator]] | [[训推不一致]] | [[Dispatcher]] | [[计算图]]
+相关: [[torch.compile]] | [[TorchDynamo]] | [[AOTAutograd]] | [[Inductor]] | [[graph break]] | [[dynamic shape]] | [[fused kernel融合算子]] | [[kernel launch overhead]] | [[CUDA Graph与graph capture]] | [[Roofline模型]] | [[SM utilization]] | [[MFU与算术强度]] | [[Custom C++ CUDA Operator]] | [[训推不一致]] | [[Dispatcher]] | [[计算图]]

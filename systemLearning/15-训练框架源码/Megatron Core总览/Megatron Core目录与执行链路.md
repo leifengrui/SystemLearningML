@@ -269,7 +269,7 @@ ps.initialize_model_parallel(tensor_model_parallel_size=8,
 
 ### 8.1 TransformerEngine 集成
 
-Megatron Core 常与 NVIDIA TransformerEngine（TE）集成：TE 提供 fused attention（FlashAttention）、fused layernorm、fused softmax 等 kernel。Megatron 的 `transformer/` 调 TE 的层，TE 内部用 cuDNN/cublas。是 [[fused kernel]] 的实战。
+Megatron Core 常与 NVIDIA TransformerEngine（TE）集成：TE 提供 fused attention（FlashAttention）、fused layernorm、fused softmax 等 kernel。Megatron 的 `transformer/` 调 TE 的层，TE 内部用 cuDNN/cublas。是 [[fused kernel融合算子]] 的实战。
 
 ### 8.2 torch.compile 与 Megatron
 
@@ -284,4 +284,4 @@ Megatron-LM（NVIDIA）→ Megatron Core（模块化重写）→ 社区分支（
 Megatron Core 目录与执行链路整理自 `megatron/core/` 源码（GitHub `Megatron-LM/megatron/core/`）、Megatron-LM 论文（Megatron-LM v1-v5）、NVIDIA dev blog。目录结构据 2024-2025 版本。时序据 `forward_backward_step` 与 `schedules.py`。与 DeviceMesh/DTensor 的对照见 [[DeviceMesh]]/[[DTensor]]。
 
 ---
-相关: [[Megatron Core总览]] | [[Megatron-LM]] | [[Tensor Parallel]] | [[Pipeline Parallel]] | [[Distributed Data Parallel]] | [[AllGather]] | [[all-reduce]] | [[reduce-scatter]] | [[all-to-all]] | [[NCCL通信拓扑]] | [[overlap strategy]] | [[compute vs communication bottleneck]] | [[alpha-beta性能模型]] | [[ColumnParallelLinear]] | [[RowParallelLinear]] | [[Sequence Parallel]] | [[1F1B调度]] | [[Interleaved schedule]] | [[Megatron distributed optimizer]] | [[gradient bucket与通信重叠]] | [[MoE token dispatcher]] | [[grouped GEMM]] | [[EP TP DP CP组合规则]] | [[Megatron distributed checkpoint]] | [[HF与Megatron checkpoint转换]] | [[DeepSpeed ZeRO vs FSDP vs Megatron]] | [[DeviceMesh]] | [[DTensor]] | [[FSDP2]] | [[torch.compile]] | [[Inductor]] | [[fused kernel]] | [[Autograd Engine]] | [[Fully Sharded Data Parallel]]
+相关: [[Megatron Core总览]] | [[Megatron-LM]] | [[Tensor Parallel]] | [[Pipeline Parallel]] | [[Distributed Data Parallel]] | [[AllGather]] | [[all-reduce]] | [[reduce-scatter]] | [[all-to-all]] | [[NCCL通信拓扑]] | [[overlap strategy]] | [[compute vs communication bottleneck]] | [[alpha-beta性能模型]] | [[ColumnParallelLinear]] | [[RowParallelLinear]] | [[Sequence Parallel]] | [[1F1B调度]] | [[Interleaved schedule]] | [[Megatron distributed optimizer]] | [[gradient bucket与通信重叠]] | [[MoE token dispatcher]] | [[grouped GEMM]] | [[EP TP DP CP组合规则]] | [[Megatron distributed checkpoint]] | [[HF与Megatron checkpoint转换]] | [[DeepSpeed ZeRO vs FSDP vs Megatron]] | [[DeviceMesh]] | [[DTensor]] | [[FSDP2]] | [[torch.compile]] | [[Inductor]] | [[fused kernel融合算子]] | [[Autograd Engine]] | [[Fully Sharded Data Parallel]]

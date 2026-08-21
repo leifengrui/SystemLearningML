@@ -213,6 +213,33 @@
 
 - [[训练显存估计]] — 新建一章节 专门来讲解 训练显存估计 假设训练92b模型 需要多少显存？（**新建型**：训练峰值显存公式 $M \approx 16N + M_{\text{act}}$，Adam+bf16 AMP 训练态 = 权重 $2N$+梯度 $2N$+optimizer state $12N$（fp32 master $4N$ + Adam $m,v$ 各 $4N$）= $16N$；92B → 1472GB 训练态、单卡 80GB OOM 19 倍、DDP 不可行、FSDP/ZeRO-3 分片 $P_{\min}\approx 16N/64 \approx 23$ 卡实测 32-64 卡；加 FA+ckpt 激活 $\approx 21.5$GB、通信临时约 5%；ZeRO-1/2/3 三阶段单卡显存分级表、不同 optimizer state 大小对照、8-bit optimizer/offload 省显存手段、口诀 $P_{\min}\approx N/4$GB；区分训练显存 vs 推理显存(2N+KV) vs $16N$、漏算 master 权重误区、MoE 用总参数算显存）
 
+## 十一、显存与内存系统 / 显存结构
+
+### [[activation memory]]
+
+- [[activation memory]] — 什么是中间值？存下来什么？什么是反向？（$y=3z+2,z=5x+3$ 完整走一遍：前向 $x=2→z=13→y=41$，反向链式法则 $\partial L/\partial z=\partial L/\partial y\cdot 3$ 等；中间值=前向算出非最终输出的量；存的是反向要再读的中间张量（含输入 $x$，因为 $dW=\partial L/\partial z\cdot x$ 要 $x$）；反向=已知 $\partial L/\partial y$ 链式倒推参数梯度；常数换成可学习参数 $W,b$ 立即需要存 $x,z$；推到 Transformer 每层 QKV/QK^T/softmax/MLP 都是中间值）
+- [[activation memory]] — 推理不存激活是因为训练不需要算梯度是吗？（方向对，因果链：训练算梯度→要反向→链式法则读前向中间值→必须存激活；推理无反向→算完即弃→不存激活；但推理自回归有 KV cache 是另一种中间状态，activation vs KV cache 五维对比表；7B 训练峰值 131GB vs 推理 15-20GB，差距主因即反向链路全套开销）
+- [[activation memory]] — 为什么激活和 batch 大小有关？能类比举一个例子吗？（草稿纸类比：权重=教科书全班一本、梯度=老师备忘录一份、激活=每个学生一张草稿 $b$ 张故 $\propto b$；MLP 中间张量 `(b,s,h)` 表算 batch 1→64 显存 16.8MB→1.07GB 严格线性；权重/梯度/optimizer 形状不随 batch 变；工程后果=大 batch 显存压力主因+gradient accumulation 拆 batch 减激活+长序列还有 $s^2$ 项是大 batch+长 seq 最坏组合）
+
+### [[gradient memory]]
+
+- [[gradient memory]] — "gradient 常以 fp16 存（计算）+ fp32 master（精度保真）需区分"是什么意思？（混合精度双轨制：fp16 副本反向计算+通信快省显存，fp32 master 副本 unscale/clip/累加/喂 optimizer 数值安全；到底存几份看实现——PyTorch AMP 只留 fp32 一份不长期占显存、Megatron/DeepSpeed 常留两份 14+28=42GB、bf16 也未必省 master；配套 loss scaling 和 fp32 master weight；[[训练显存估计]] 16N 公式已含此账，粗心漏算会低估 28GB 致 ZeRO 卡数算错 OOM）
+
+### [[optimizer state memory]]
+
+- [[optimizer state memory]] — 有 2 个 state 为什么是 4×？（4× = 2 个 state × fp32(4B) vs fp16(2B) = 因子 A 2× × 因子 B 2× = 4×；字节账 $2N×4=8N$ 权重 $2N$ 比值 8/2=4；反例表——全 fp32 训练变 2×、SGD+momentum 1 state 变 2×、8-bit Adam state 1B 变 1×、bf16 权重仍 2B 故仍 4×；state 保 fp32 因 $v$ 平方下溢+$m$ 累加误差，权重可降精度 state 不能，正是混合精度设计核心）
+
+## 十一、显存与内存系统 / 优化技术
+
+### [[ZeRO (DeepSpeed)]]
+
+- [[ZeRO (DeepSpeed)]] — 消除标准 DP 中每卡冗余存全量的浪费，为什么会有冗余？（**行内型**：根因是 DP 把"计算并行"和"存储并行"绑一起——每卡要独立完成自己 batch 的前向+反向+optimizer step，必须本地持有完整权重/梯度/state（activation 除外，它本就各卡不同才算真正并行）；7B Adam 单卡 88GB 里只有 4.3GB activation 是"各卡不同"，其余 84GB（权重14+梯度14+state56）N卡各存一份字节级完全一致拷贝，N=8 即 672GB 纯重复；冗余是 DP 算法约束不是 bug；ZeRO 洞察=计算仍并行不改计算图、把参数相关三块分片 1/N、用完聚合释放，冗余 N×→1×；三误区：冗余≠传输重复、activation 不冗余、ZeRO-3 不是零所有冗余只是零参数相关冗余）
+- [[ZeRO (DeepSpeed)]] — "通信换速度"？每卡存一部分用时传输？这算什么创新？（**行内型**：①纠正"通信换速度"是反的——ZeRO-1/2 通信量严格不变（$\frac{2(N-1)}{N}V=2V$，reduce-scatter 同 allreduce 量）是免费午餐，ZeRO-3 才增 ~2× 通信换显存（throughput 反降 5~30%），口诀"1 分 state 不传参、2 加分 grad 不传参、3 才分参数要 all-gather"；②"分片+传输"动作本身不新（HPC sharding/PS 2011/TP 都有），ZeRO 真正创新两点——(a) 指出 DP 全行业忽视 20 年的 N× 存储冗余（7B Adam 单卡 88GB 里 84GB 各卡字节级相同拷贝，小模型时代不痛、GPT-2/3 量级才致命），(b) 用通信量不变性 $\Theta(V)$ 定理证明拆冗余可无损、并给出 ZeRO-1/2/3 三阶段递进配方；③为何 2019 才出——小模型不痛+TP 先入为主+NCCL 2.0+ 才把 all-gather/reduce-scatter 优化到同速+Adam fp32 state 让 state 占 60% 才值得切；④一句话=工具老（分片+聚合）洞察新（哪冗余、拆了通信会不会爆），创新在洞察与数学证明不在动作）
+
+### [[gradient checkpointing]]
+
+- [[gradient checkpointing]] — 可以这么理解吗：10 层本来每层都要存，现在只存第 1/5/10 层，用这三层重算前向把中间补齐？（方向对，补两细节——① 检查点=段边界把 10 层切 [1-4][5-9][10] 三段，段长决定重算量是显存/算力 trade-off，第 1 层输入本就免费存；② 重算按需局部临时补用完即弃不是补齐后全留否则退回全存；10 层 1/5/10 检查点压缩约 37×、FLOP 开销约 30% 与全 ckpt 33% 量级一致）
+
 ---
 
 ## 四、强化学习基础 / RL基本概念
@@ -372,6 +399,26 @@
 ### [[all-reduce]]
 
 - [[all-reduce]] — 普通信号适合用 all-reduce 传递吗？性能影响如何？（**行内型**：不适合——all-reduce 是"大块张量归约"原语非"传消息"原语；语义不对(归约抹原值,要原值用 broadcast)、性能浪费(小消息 launch 开销 10-100μs 主导,大炮打蚊子)、同步过重(集合通信自带 barrier 绑架异步)、NCCL 只管 GPU tensor CPU 信号该走 gloo/Ray；正确做法表=状态用 broadcast/点对点用 send-recv/CPU 用 gloo·Ray·RPC/指标聚合才用 all-reduce；口诀"要原值用 broadcast,要归约用 all-reduce"）
+
+## 十三、GPU 架构与 CUDA 编程 / CUTLASS
+
+### [[CUTLASS与GEMM]]
+
+- [[CUTLASS与GEMM]] — 什么是GEMM？（**行内型**：GEMM=GEneral Matrix Multiply，BLAS Level 3 的 `xGEMM`（SGEMM/DGEMM/HGEMM），标准形式 $C=\alpha AB+\beta C$，带 alpha/beta 的 fused multiply-add 而非单纯 $C=AB$；LLM ~70% FLOP 在 GEMM（QKV/O 投影、FFN MLP、logits），算术强度 $I\approx 2M$ 是 compute-bound 典范（[[Roofline模型]]）；三层加速=tiling 进 smem + double buffer 流水 + epilogue 融合，正是 CUTLASS 模板化的事；`torch.mm`=β=0，`torch.addmm`=完整 xGEMM，内部走 cuBLAS（内核源自 CUTLASS）；四误区——以为只有 C=AB 漏 α/β、混 elementwise 与 reduce、混 GEMM 与 cuBLAS、把 grouped GEMM 当多次普通 GEMM）
+
+---
+
+## 十三、GPU 架构与 CUDA 编程 / GPU执行模型与内存层级
+
+### [[GPU执行模型]]
+
+- [[GPU执行模型]] — kernel 和执行模型是什么关系？launch 开销 ~2-5 μs 对吗？（**行内型**：①kernel=你写的 GPU 函数 + `<<<grid, block>>>` launch 配置，执行模型=硬件按 grid→block→warp→SIMT 把这个 kernel 跑起来的抽象机制，两者是"被运行的程序 vs 运行它的机制"关系；本笔记 §3.5 kernel launch 到执行的链路就是把两者串起来；②数字偏乐观——driver API 最薄 ~2-5μs、runtime API `<<<>>>` 默认 ~3-10μs、Windows WDDM 模式 ~20-50μs，生产常见 3-10μs；③5μs 花在参数打包(~0.5-1μs)+runtime→driver 跳转(~1-2μs)+driver 写命令队列 doorbell(~1-2μs)+GPU front-end 取指 block 分发(~1-2μs)，CPU 写完队列就返回(async)≠GPU 启动延迟；④小 kernel 被 launch 开销吃掉→用 CUDA Graph capture / fused kernel 治；⑤一句话=吞吐优先执行模型的固有代价，大 kernel 摊平可忽略小 kernel 暴露）
+
+## 十三、GPU 架构与 CUDA 编程 / CUDA stream与event
+
+### [[异步memcpy与pinned memory]]
+
+- [[异步memcpy与pinned memory]] — data loader 是什么？（**行内型**：PyTorch/框架的训练数据迭代器——把 Dataset 按 batch_size/shuffle/num_workers/pin_memory/collate_fn 自动切成一批批 batch 喂训练循环，并把"取样本+拼 batch+拷到 GPU"放到后台 worker 与 GPU 计算并发藏延迟；关键参数表(num_workers/pin_memory/drop_last/collate_fn/prefetch_factor)；与本笔记关系=它是 pinned+async 的用户层入口，三件套=num_workers>0 + pin_memory=True + .to('cuda', non_blocking=True) 缺一不可；四误区——pin_memory 单独不快要 worker 配、num_workers 不是越多越好挤 RAM、DataLoader 还管 shuffle+collate+padding+DistributedSampler 不只取数据、推理也用 DataLoader；LLM 训练数据管线 Arrow/Parquet→tokenize→IterableDataset→DataLoader→non_blocking .to('cuda)→与 forward 并发，pipeline bottleneck 时 GPU 利用率 95%→60%）
 
 ---
 相关: [[整体目录]]、[[张量与自动微分]]、[[优化器]]、[[训练工程基础]]、[[Transformer基础]]、[[03-PyTorch与框架工程]]

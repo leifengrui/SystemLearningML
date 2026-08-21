@@ -244,7 +244,7 @@ y_dt = x_dt @ W_dt  # [Partial] -> all-reduce -> [Replicate], 前向 all-reduce 
 
 ### 8.1 融合 O + bias_add
 
-Megatron 用融合 kernel 算 O（`FusedO`）+ bias add。TE 的 `Linear` 层封装。是 [[fused kernel]] 实战。
+Megatron 用融合 kernel 算 O（`FusedO`）+ bias add。TE 的 `Linear` 层封装。是 [[fused kernel融合算子]] 实战。
 
 ### 8.2 sequence parallel 的 reduce-scatter
 
@@ -259,4 +259,4 @@ TE 的 `Linear` 层封装 row 切分，内部融合。详见 [[Megatron Core目�
 RowParallelLinear 整理自 Megatron-LM 论文 v1、`megatron/core/tensor_parallel/layers.py` 源码。与 ColumnParallelLinear 的配对与通信对称见论文。与 DTensor 的对照见 [[DTensor]]。
 
 ---
-相关: [[Tensor Parallel算子]] | [[Tensor Parallel]] | [[ColumnParallelLinear]] | [[Megatron Core目录与执行链路]] | [[Sequence Parallel]] | [[DTensor]] | [[all-reduce]] | [[reduce-scatter]] | [[HF与Megatron checkpoint转换]] | [[Megatron-LM]] | [[nn.Module]] | [[ATen与c10]] | [[fused kernel]]
+相关: [[Tensor Parallel算子]] | [[Tensor Parallel]] | [[ColumnParallelLinear]] | [[Megatron Core目录与执行链路]] | [[Sequence Parallel]] | [[DTensor]] | [[all-reduce]] | [[reduce-scatter]] | [[HF与Megatron checkpoint转换]] | [[Megatron-LM]] | [[nn.Module]] | [[ATen与c10]] | [[fused kernel融合算子]]

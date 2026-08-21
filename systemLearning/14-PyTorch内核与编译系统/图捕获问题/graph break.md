@@ -254,4 +254,4 @@ PyTorch 实验 `torch.cond`/`torch.while_loop`（symbolic 控制流）让 data-d
 graph break 整理自 PyTorch dev docs "TorchDynamo graph breaks"、`torch/_dynamo/` 源码、`TORCH_COMPILE_DEBUG` 输出格式。常见 break 源见 Dynamo unsupported list。
 
 ---
-相关: [[图捕获问题]] | [[TorchDynamo]] | [[torch.compile]] | [[Inductor]] | [[dynamic shape]] | [[CUDA Graph与graph capture]] | [[Custom C++ CUDA Operator]] | [[torch profiler]] | [[fused kernel]] | [[kernel launch overhead]]
+相关: [[图捕获问题]] | [[TorchDynamo]] | [[torch.compile]] | [[Inductor]] | [[dynamic shape]] | [[CUDA Graph与graph capture]] | [[Custom C++ CUDA Operator]] | [[torch profiler]] | [[fused kernel融合算子]] | [[kernel launch overhead]]

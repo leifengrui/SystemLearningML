@@ -9,6 +9,7 @@
 ## 1. 一句话定义
 
 **GPU 内存层级**是 GPU 上从快到慢、从小到大的一组存储层级——**register（寄存器）→ shared memory（片上 SRAM，常与 L1 共用）→ L1/L2 cache（硬件管理）→ HBM（高带宽显存）→ host 内存（CPU DRAM，经 PCIe/NVLink 拿）**——每一级容量更大但带宽更低、延迟更高，CUDA 编程的核心优化就是**把热数据压到尽量靠近计算单元的层级**（register / shared memory），减少对 HBM 的访问。它是 [[Roofline模型]] 里"带宽"那一维的具体物理来源，也是 [[FlashAttention]] 等融合算子能减 HBM IO 的根基。
+![[Pasted image 20260719143237.png]]
 
 > [!note] 三句话定位
 > - **是什么**：register → shared/L1 → L2 → HBM → host，从快小到慢大，越靠近算力越快。
@@ -84,7 +85,7 @@ LLM 推理的 KV cache 命中 L2 能显著减 HBM 压力；vLLM/SGLang 的 [[Rad
 
 HBM 是 GPU 主显存（A100 80GB），权重/激活/KV/optimizer state 都在这。带宽 2 TB/s 看似高，但相对 312 TFLOPs 算力仍吃紧（ridge point ~156 FLOP/byte，见 [[Roofline模型]]）。
 
-**所有"减显存访问"的优化**（[[FlashAttention]] 的 tiling、[[fused kernel]] 的算子融合、[[gradient checkpointing]] 的重算换显存）本质都是减 HBM 读写次数。
+**所有"减显存访问"的优化**（[[FlashAttention]] 的 tiling、[[fused kernel融合算子]] 的算子融合、[[gradient checkpointing]] 的重算换显存）本质都是减 HBM 读写次数。
 
 ### 3.6 host 内存与 pinned memory
 
@@ -185,7 +186,7 @@ print(f"stride=2: {bank_access(2)}-way")                     # 1-way (偶数/奇
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: [[GPU执行模型]]（warp / block 是访问的执行单位）、GPU 硬件物理结构。
-- **下游（应用）**: [[Roofline模型]]（HBM 带宽是 memory-bound 的物理来源）、[[SM utilization]]/[[occupancy分析]]（register/smem 限 occupancy）、[[FlashAttention]]（tiling 减 HBM IO）、[[fused kernel]]（融合减中间结果落 HBM）、[[异步memcpy与pinned memory]]（host↔device 层级）、[[CUDA allocator与memory pool]]（HBM 的分配与碎片）、[[memory bandwidth]]（HBM 带宽利用率）。
+- **下游（应用）**: [[Roofline模型]]（HBM 带宽是 memory-bound 的物理来源）、[[SM utilization]]/[[occupancy分析]]（register/smem 限 occupancy）、[[FlashAttention]]（tiling 减 HBM IO）、[[fused kernel融合算子]]（融合减中间结果落 HBM）、[[异步memcpy与pinned memory]]（host↔device 层级）、[[CUDA allocator与memory pool]]（HBM 的分配与碎片）、[[memory bandwidth]]（HBM 带宽利用率）。
 - **对比 / 易混**:
   - **shared memory vs L1 cache**：物理同一 SRAM，但 shared 可编程（显式 `__shared__`），L1 硬件管理。可配比。
   - **shared memory vs register**：register 线程私有最快，shared block 共享稍慢但可协作。
@@ -239,4 +240,4 @@ CUDA 11+ 允许 L2 的 persistent 部分钉住某段 global memory（`cudaStream
 内存层级（register/shared/L1/L2/HBM、bank、tiling）整理自 NVIDIA CUDA C++ Programming Guide 的 Memory Hierarchy 章节，以及 《Programming Massively Parallel Processors》第 5 章。
 
 ---
-相关: [[GPU执行模型与内存层级]] | [[GPU执行模型]] | [[Roofline模型]] | [[SM utilization]] | [[occupancy分析]] | [[memory bandwidth]] | [[FlashAttention]] | [[fused kernel]] | [[异步memcpy与pinned memory]] | [[CUDA allocator与memory pool]] | [[ncu (Nsight Compute)]] | [[Radix Tree prefix cache]]
+相关: [[GPU执行模型与内存层级]] | [[GPU执行模型]] | [[Roofline模型]] | [[SM utilization]] | [[occupancy分析]] | [[memory bandwidth]] | [[FlashAttention]] | [[fused kernel融合算子]] | [[异步memcpy与pinned memory]] | [[CUDA allocator与memory pool]] | [[ncu (Nsight Compute)]] | [[Radix Tree prefix cache]]

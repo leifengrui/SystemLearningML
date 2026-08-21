@@ -215,7 +215,7 @@ ncu --metrics \
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: [[GPU执行模型]]（warp/SM/tensor core）、[[Roofline模型]]（Memory Chart 的理论）、[[occupancy分析]]（Occupancy 视图）、[[GPU内存层级]]（各级带宽 metric）。
-- **下游（应用）**: [[SM utilization]]（occupancy 实测）、[[Triton kernel开发]]（autotune 用 throughput，ncu 诊断为何慢）、[[CUTLASS与GEMM]]（GEMM 调优）、[[FlashAttention]]（attention IO 验证）、[[fused kernel]]（融合前后 IO 对比）、[[ncu (Nsight Compute)]]（本章总览）。
+- **下游（应用）**: [[SM utilization]]（occupancy 实测）、[[Triton kernel开发]]（autotune 用 throughput，ncu 诊断为何慢）、[[CUTLASS与GEMM]]（GEMM 调优）、[[FlashAttention]]（attention IO 验证）、[[fused kernel融合算子]]（融合前后 IO 对比）、[[ncu (Nsight Compute)]]（本章总览）。
 - **对比 / 易混**:
   - **ncu vs [[nsys (Nsight Systems)|nsys]]**：ncu 单 kernel 微观（为什么慢），nsys 系统宏观（哪个慢、谁等谁）。先 nsys 再 ncu。
   - **ncu vs [[nvprof（旧）]]**：ncu 是 nvprof 的继任者，支持新 GPU 新特性，nvprof 退役。
@@ -266,4 +266,4 @@ ncu 对同一 kernel 跑多遍采不同 metric（因硬件 counter 有限，一�
 ncu 用法整理自 NVIDIA Nsight Compute 文档与 `--help`，Memory Chart/roofline 集成见 Nsight Compute tutorial，与 [[nsys (Nsight Systems)]]/[[nvprof（旧）]] 的分工见 NVIDIA profiling guide。
 
 ---
-相关: [[Nsight Compute]] | [[nsys (Nsight Systems)]] | [[nvprof（旧）]] | [[torch profiler]] | [[GPU执行模型]] | [[Roofline模型]] | [[occupancy分析]] | [[SM utilization]] | [[GPU内存层级]] | [[Triton kernel开发]] | [[CUTLASS与GEMM]] | [[FlashAttention]] | [[fused kernel]]
+相关: [[Nsight Compute]] | [[nsys (Nsight Systems)]] | [[nvprof（旧）]] | [[torch profiler]] | [[GPU执行模型]] | [[Roofline模型]] | [[occupancy分析]] | [[SM utilization]] | [[GPU内存层级]] | [[Triton kernel开发]] | [[CUTLASS与GEMM]] | [[FlashAttention]] | [[fused kernel融合算子]]

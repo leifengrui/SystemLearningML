@@ -28,7 +28,7 @@ eager 模式反向走 [[Autograd Engine]] 逐 grad_fn 节点调度：每个 back
 
 ### 2.3 decomposition 让复杂 op 可融合
 
-`elu`/`layer_norm`/`softmax` 等 high-level op 若整体当一节点，Inductor 难融合（不知内部结构）。AOTAutograd 做 **decomposition**：把 `elu` 拆成 `exp(x)-1` 等 low-level ATen op，让 Inductor 把拆开的 op 与相邻 op 融合。是 [[fused kernel]] 自动化的关键。
+`elu`/`layer_norm`/`softmax` 等 high-level op 若整体当一节点，Inductor 难融合（不知内部结构）。AOTAutograd 做 **decomposition**：把 `elu` 拆成 `exp(x)-1` 等 low-level ATen op，让 Inductor 把拆开的 op 与相邻 op 融合。是 [[fused kernel融合算子]] 自动化的关键。
 
 ### 2.4 functionalization 消除副作用
 
@@ -122,7 +122,7 @@ joint graph 含前向 FLOP $F_{\text{fwd}}$ + 反向 FLOP $F_{\text{bwd}} \appro
 
 ### 4.2 融合的 byte 收益
 
-eager 反向逐节点：每 backward op 读 saved + 读 grad + 写 grad，$\sim 3N$ byte/op。joint 融合：相邻 backward op 中间 grad 在 register 传递，$\sim N$ byte（只读 saved + 写最终 grad）。省 $\sim 3\times$ byte（见 [[fused kernel]]）。
+eager 反向逐节点：每 backward op 读 saved + 读 grad + 写 grad，$\sim 3N$ byte/op。joint 融合：相邻 backward op 中间 grad 在 register 传递，$\sim N$ byte（只读 saved + 写最终 grad）。省 $\sim 3\times$ byte（见 [[fused kernel融合算子]]）。
 
 ### 4.3 saved tensors 的显存 vs 重算
 
@@ -130,7 +130,7 @@ eager 反向逐节点：每 backward op 读 saved + 读 grad + 写 grad，$\sim 
 
 ### 4.4 decomposition 的可融合性
 
-high-level op 整体：Inductor 只能整体 codegen（或 fallback dispatcher）。拆成 low-level：相邻 low-level 融合（elementwise 串合一 kernel）。拆开后融合的 byte 收益见 [[fused kernel]] 4.1（$k$ op 合一省 $k\times$ byte）。
+high-level op 整体：Inductor 只能整体 codegen（或 fallback dispatcher）。拆成 low-level：相邻 low-level 融合（elementwise 串合一 kernel）。拆开后融合的 byte 收益见 [[fused kernel融合算子]] 4.1（$k$ op 合一省 $k\times$ byte）。
 
 
 ## 5. 代码示例（可选）
@@ -181,7 +181,7 @@ def f(x):
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: [[TorchDynamo]]（输入前向 FX Graph）、[[Autograd Engine]]（autograd 公式来源、eager 对应物）、[[Dispatcher]]（Autograd 层的公式注册）、[[ATen与c10]]（decomposition 到 ATen op）。
-- **下游（应用）**: [[torch.compile]]（AOTAutograd 是第二段）、[[Inductor]]（接 joint graph codegen）、[[gradient checkpointing]]（编译路径的 saved/recompute 决策）、[[activation memory]]（saved tensors 显存）、[[FLOPs计算]]（joint graph 的 FLOP）、[[fused kernel]]（decomposition 让融合更易）、`torch.export`（共用 decomposition/functionalization）。
+- **下游（应用）**: [[torch.compile]]（AOTAutograd 是第二段）、[[Inductor]]（接 joint graph codegen）、[[gradient checkpointing]]（编译路径的 saved/recompute 决策）、[[activation memory]]（saved tensors 显存）、[[FLOPs计算]]（joint graph 的 FLOP）、[[fused kernel融合算子]]（decomposition 让融合更易）、`torch.export`（共用 decomposition/functionalization）。
 - **对比 / 易混**:
   - **AOTAutograd vs [[Autograd Engine]]**：见 3.6，编译路径（静态反向图 + 融合）vs eager（运行时逐节点调度）。
   - **AOTAutograd vs [[TorchDynamo]]**：Dynamo 出前向 op 级图；AOTAutograd 加反向 + decomposition + functionalization → joint graph。
@@ -236,4 +236,4 @@ DTensor op（[[DTensor]]）可被 AOTAutograd decomposition（如 `aten.slice` �
 AOTAutograd 整理自 PyTorch dev docs "AOTAutograd"、`torch/_functorch/` 源码、`torch._decomp` decomposition 规则。joint graph/min-cut 见 functorch design doc。与 [[Autograd Engine]]/[[Inductor]] 的分工见 compile 流水文档。
 
 ---
-相关: [[Compiler组件]] | [[torch.compile]] | [[TorchDynamo]] | [[Inductor]] | [[Autograd Engine]] | [[Dispatcher]] | [[ATen与c10]] | [[fused kernel]] | [[gradient checkpointing]] | [[activation memory]] | [[FLOPs计算]] | [[Custom C++ CUDA Operator]] | [[FSDP2]] | [[DTensor]]
+相关: [[Compiler组件]] | [[torch.compile]] | [[TorchDynamo]] | [[Inductor]] | [[Autograd Engine]] | [[Dispatcher]] | [[ATen与c10]] | [[fused kernel融合算子]] | [[gradient checkpointing]] | [[activation memory]] | [[FLOPs计算]] | [[Custom C++ CUDA Operator]] | [[FSDP2]] | [[DTensor]]

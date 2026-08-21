@@ -240,11 +240,11 @@ OBQ（Frantar et al. 2022）是 GPTQ 的直接前身，把 OBS 从剪枝推广�
 
 ### 8.2 Marlin kernel（GPTQ/AWQ 通用）
 
-GPTQ 与 AWQ 的 int4 权重推理最终都走 **Marlin**（vLLM 集成的 universal int4 kernel）——dequant + GEMM 融合，[[fused kernel]] 在量化的应用。原 GPTQ-GEMM kernel 慢，新 vLLM 默认 Marlin，AWQ/GPTQ 权重格式 Marlin 都吃。故推理速度两者趋同，选型主要看校准成本与精度偏好。
+GPTQ 与 AWQ 的 int4 权重推理最终都走 **Marlin**（vLLM 集成的 universal int4 kernel）——dequant + GEMM 融合，[[fused kernel融合算子]] 在量化的应用。原 GPTQ-GEMM kernel 慢，新 vLLM 默认 Marlin，AWQ/GPTQ 权重格式 Marlin 都吃。故推理速度两者趋同，选型主要看校准成本与精度偏好。
 
 ### 8.3 content来源
 
 GPTQ 整理自 Frantar et al. "GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers"（ICLR 2023）、OBS（Hassibi & Stahl 1993）、OBQ（Frantar et al. 2022 "Optimal Brain Quantization"）、AutoGPTQ GitHub、vLLM `--quantization gptq` 文档与 `vllm/model_executor/layers/quantization/gptq/` 源码、Marlin kernel。与 AWQ 对照见 [[AWQ]]。
 
 ---
-相关: [[量化]] | [[AWQ]] | [[INT8推理]] | [[FP4与低比特]] | [[FP8量化方案]] | [[数值类型与精度]] | [[mixed precision training]] | [[memory bandwidth]] | [[Roofline模型]] | [[新模型接入]] | [[model runner]] | [[Tensor Parallel]] | [[fused kernel]] | [[sampling throughput]] | [[loss scaling]]
+相关: [[量化]] | [[AWQ]] | [[INT8推理]] | [[FP4与低比特]] | [[FP8量化方案]] | [[数值类型与精度]] | [[mixed precision training]] | [[memory bandwidth]] | [[Roofline模型]] | [[新模型接入]] | [[model runner]] | [[Tensor Parallel]] | [[fused kernel融合算子]] | [[sampling throughput]] | [[loss scaling]]

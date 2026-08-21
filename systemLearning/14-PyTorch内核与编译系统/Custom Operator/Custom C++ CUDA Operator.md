@@ -20,7 +20,7 @@
 
 ### 2.1 手写 kernel 要接入训练
 
-[[FlashAttention]]、[[fused kernel]]、[[Triton kernel开发]] 的 kernel 性能好，但要进训练流程：`requires_grad` 的输入要自动建 autograd 图、`.backward()` 要自动调对应反向 kernel、torch.compile 要能 trace 它。若只在 Python 写个函数包 kernel，autograd 与 compile 都不认识它。需把 kernel **注册成 dispatcher 认识的 op**。
+[[FlashAttention]]、[[fused kernel融合算子]]、[[Triton kernel开发]] 的 kernel 性能好，但要进训练流程：`requires_grad` 的输入要自动建 autograd 图、`.backward()` 要自动调对应反向 kernel、torch.compile 要能 trace 它。若只在 Python 写个函数包 kernel，autograd 与 compile 都不认识它。需把 kernel **注册成 dispatcher 认识的 op**。
 
 ### 2.2 旧方案的痛点
 
@@ -224,7 +224,7 @@ torch.library.opcheck(torch.ops.myops.foo.default, (x,), {'n': 3})
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: [[Dispatcher]]（注册机制）、[[ATen与c10]]（DispatchKey/Schema/codegen）、[[Autograd Engine]]（autograd kernel 建 grad_fn）、C++/CUDA 编程。
-- **下游（应用）**: [[FlashAttention]]/[[fused kernel]]/[[Triton kernel开发]]/[[CUTLASS与GEMM]]（手写 kernel 接入 PyTorch 的标准接口）、[[torch.compile]]/[[TorchDynamo]]/[[Inductor]]（注册的 op 才能 trace 不 graph break）、`torch.export`/torch.fx graph（注册的 op 才能序列化）、[[PyBind11与CMake]]（编译扩展的 build 系统）。
+- **下游（应用）**: [[FlashAttention]]/[[fused kernel融合算子]]/[[Triton kernel开发]]/[[CUTLASS与GEMM]]（手写 kernel 接入 PyTorch 的标准接口）、[[torch.compile]]/[[TorchDynamo]]/[[Inductor]]（注册的 op 才能 trace 不 graph break）、`torch.export`/torch.fx graph（注册的 op 才能序列化）、[[PyBind11与CMake]]（编译扩展的 build 系统）。
 - **对比 / 易混**:
   - **TORCH_LIBRARY vs `torch.autograd.Function`**：前者 C++ 层正式注册（compile/export 友好、多后端统一、codegen binding）；后者 Python 层 ad-hoc（快 prototype 但 graph break、单后端）。新代码用前者。
   - **TORCH_LIBRARY vs [[PyBind11与CMake]]**：TORCH_LIBRARY 注册 op 到 dispatcher（PyTorch 原生机制）；PyBind11 是把 C++ 类/函数绑到 Python 的通用工具（更底层、更通用但不自动 dispatcher/autograd/compile）。两者可并用：TORCH_LIBRARY 注册 op，PyBind11 绑辅助类。
@@ -291,4 +291,4 @@ C++ 扩展编译需与 PyTorch 二进制 ABI 兼容（见 [[PyBind11与CMake]]�
 TORCH_LIBRARY 机制整理自 PyTorch `torch/library.h`、dev docs "Custom C++ and CUDA Extensions" 与 "Registering a Dispatch Key"、以及 torch.export/torch.compile 对自定义 op 的兼容性文档。schema 语言见 TorchScript type reference。
 
 ---
-相关: [[Custom Operator]] | [[Dispatcher]] | [[ATen与c10]] | [[Autograd Engine]] | [[PyBind11与CMake]] | [[torch.compile]] | [[TorchDynamo]] | [[Inductor]] | [[graph break]] | [[Triton kernel开发]] | [[CUTLASS与GEMM]] | [[FlashAttention]] | [[fused kernel]]
+相关: [[Custom Operator]] | [[Dispatcher]] | [[ATen与c10]] | [[Autograd Engine]] | [[PyBind11与CMake]] | [[torch.compile]] | [[TorchDynamo]] | [[Inductor]] | [[graph break]] | [[Triton kernel开发]] | [[CUTLASS与GEMM]] | [[FlashAttention]] | [[fused kernel融合算子]]

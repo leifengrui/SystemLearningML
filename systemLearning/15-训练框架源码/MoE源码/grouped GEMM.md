@@ -229,7 +229,7 @@ def grouped_gemm_kernel(a_ptr, b_ptr, c_ptr, group_offsets, Ms, Ns, Ks, ...):
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: [[MoE token dispatcher]]（派 token）、[[Mixture of Experts|MoE]]（MoE 概念）、[[CUTLASS与GEMM]]（CUTLASS grouped GEMM）、[[Triton kernel开发]]（Triton grouped GEMM）、[[GEMM]]（基础 matmul）、[[Megatron Core目录与执行链路]]。
-- **下游（应用）**: [[Megatron-LM]] 的 MoE expert 计算、DeepSeek-MoE/MoE 模型训练、MoE 推理（[[TP PP DP EP推理]]）、[[fused kernel]]（grouped GEMM 是融合 kernel）。
+- **下游（应用）**: [[Megatron-LM]] 的 MoE expert 计算、DeepSeek-MoE/MoE 模型训练、MoE 推理（[[TP PP DP EP推理]]）、[[fused kernel融合算子]]（grouped GEMM 是融合 kernel）。
 - **对比 / 易混**:
   - **grouped GEMM vs loop over experts**：前者一次打包（省 launch、提算力），后者逐 expert（开销大、小 GEMM 低效）。grouped 是 MoE 标配。
   - **grouped GEMM vs batched GEMM**：batched GEMM 等大（每组 $M$ 同），grouped 变长（每组 $M$ 不同）。grouped 是变长 batched。MoE 用 grouped（变长）。
@@ -273,11 +273,11 @@ grouped GEMM 是 MoE 性能关键。用 [[ncu (Nsight Compute)]] 看 SM utilizat
 
 ### 8.3 与 fused kernel 的关系
 
-grouped GEMM 是融合 kernel（多 GEMM 一次）。可与 activation（act）融合（gate_up + act 一 kernel）。是 [[fused kernel]] 在 MoE 的应用。
+grouped GEMM 是融合 kernel（多 GEMM 一次）。可与 activation（act）融合（gate_up + act 一 kernel）。是 [[fused kernel融合算子]] 在 MoE 的应用。
 
 ### 8.4 内容来源
 
 grouped GEMM 整理自 Megatron-LM `megatron/core/moe/grouped_gemm.py` 源码、CUTLASS `GemmGrouped` 文档、Triton `04-fused-attention` 等示例。变长与 BlockSparse 见 CUTLASS 文档。与 dispatcher 的配合见 [[MoE token dispatcher]]。
 
 ---
-相关: [[MoE源码]] | [[MoE token dispatcher]] | [[Mixture of Experts]] | [[CUTLASS与GEMM]] | [[Triton kernel开发]] | [[GEMM]] | [[fused kernel]] | [[Megatron Core目录与执行链路]] | [[occupancy分析]] | [[ncu (Nsight Compute)]] | [[TP PP DP EP推理]] | [[alpha-beta性能模型]]
+相关: [[MoE源码]] | [[MoE token dispatcher]] | [[Mixture of Experts]] | [[CUTLASS与GEMM]] | [[Triton kernel开发]] | [[GEMM]] | [[fused kernel融合算子]] | [[Megatron Core目录与执行链路]] | [[occupancy分析]] | [[ncu (Nsight Compute)]] | [[TP PP DP EP推理]] | [[alpha-beta性能模型]]

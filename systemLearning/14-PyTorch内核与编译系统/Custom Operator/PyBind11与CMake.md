@@ -224,7 +224,7 @@ PYBIND11_MODULE(flash_attn, m) {
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: C++/CUDA 编译链、CMake/Ninja build 系统、pybind11 库、PyTorch 的 `torch.utils.cpp_extension`。
-- **下游（应用）**: [[Custom C++ CUDA Operator]]（TORCH_LIBRARY 扩展的 build）、[[FlashAttention]]/[[fused kernel]]/[[CUTLASS与GEMM]]（kernel 扩展的 build 与 install）、[[Triton kernel开发]]（Triton 本身 JIT 不需 CMake，但辅助 CUDA 部分需）、独立 CUDA kernel 扩展（如 vLLM 的 custom kernel）。
+- **下游（应用）**: [[Custom C++ CUDA Operator]]（TORCH_LIBRARY 扩展的 build）、[[FlashAttention]]/[[fused kernel融合算子]]/[[CUTLASS与GEMM]]（kernel 扩展的 build 与 install）、[[Triton kernel开发]]（Triton 本身 JIT 不需 CMake，但辅助 CUDA 部分需）、独立 CUDA kernel 扩展（如 vLLM 的 custom kernel）。
 - **对比 / 易混**:
   - **CMake vs `setup.py`**：CMake 是声明式 build 系统（跨平台、灵活）；setup.py 是 Python 打包（配合 BuildExtension 简化）。两者可结合（CMake 作为 setup.py 的 build_ext backend）。2026 年趋势是纯 CMake 或 `scikit-build-core`（CMake + Python packaging）。
   - **pybind11 vs TORCH_LIBRARY**：见 3.8，前者绑辅助类，后者注册 op 到 dispatcher。并用。
@@ -279,4 +279,4 @@ CMake build 的扩展若含 TORCH_LIBRARY 注册的 op，torch.compile 可 trace
 pybind11/CMake/torch.utils.cpp_extension 整理自 PyTorch dev docs "Custom C++ and CUDA Extensions" 与 "Extension builds"、CMake 官方 docs、pybind11 README。ABI 兼容见 PyTorch `torch/utils/cpp_extension.py` 的 `BuildExtension` 实现。
 
 ---
-相关: [[Custom Operator]] | [[Custom C++ CUDA Operator]] | [[Dispatcher]] | [[ATen与c10]] | [[torch.compile]] | [[graph break]] | [[CUDA Graph与graph capture]] | [[FlashAttention]] | [[fused kernel]] | [[CUTLASS与GEMM]] | [[Triton kernel开发]] | [[kernel launch overhead]]
+相关: [[Custom Operator]] | [[Custom C++ CUDA Operator]] | [[Dispatcher]] | [[ATen与c10]] | [[torch.compile]] | [[graph break]] | [[CUDA Graph与graph capture]] | [[FlashAttention]] | [[fused kernel融合算子]] | [[CUTLASS与GEMM]] | [[Triton kernel开发]] | [[kernel launch overhead]]
