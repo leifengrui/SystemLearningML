@@ -18,6 +18,7 @@
 - [[数值类型与精度]] — 数值类型应单独展开成笔记（新建笔记，由 Tensor 批注触发）
 - [[数值类型与精度]] — 混合精度训练是什么？
 - [[数值类型与精度]] — 现在最主流的用法是什么？（bf16 AMP + fp32 master；V100 用 fp16+loss scaling；推理 int8/fp8）
+- [[块缩放浮点格式]] — 扩展 MXFP8/HiF4/NVFP4 等新一代块缩放浮点 BFP 格式（**新建型+联网**：独立笔记完整展开 BFP 三段式结构 / OCP MX 族 / MXFP8 / 4-bit 三巨头深度 / HiF4 三级层级公式与三阶段转换算法 / NVFP4 为何需 PTS 的推导 / 64 长度点积计算流 / 硬件面积功耗对比 / 7 误区；行内简版见 [[数值类型与精度]] §8；arXiv:2602.11287/2506.08027/2310.10537 核实）
 - [[mixed precision training]] — 混合精度训练完整展开（bf16 AMP 主流路线、autocast 算子分派、fp32 master 权重、显存账 4P）
 - [[mixed precision training]] — 哪里要用高精度？（master 权重/优化器状态/梯度累加/loss/数值敏感算子=累加归约小步长统计量保 fp32）
 - [[loss scaling]] — fp16 训练防梯度下溢的损失缩放机制（bf16 不需要、dynamic scaling、skip step）
@@ -42,6 +43,10 @@
 ### [[Adam与AdamW]]
 
 - [[Adam与AdamW]] — 优化器优化了什么？起了什么作用？（优化模型参数 θ；作用=把梯度变成参数更新：定方向/定步长/定正则）
+
+### [[梯度裁剪]]
+
+- [[梯度裁剪]] — DAPO 的 Clip-Higher 是不是与梯度裁剪有关？（**行内型**：不直接相关——Clip-Higher 属 PPO clipped objective 族，裁 importance ratio ρ=π_θ/π_old（损失层），是后者的解耦改进（ε_low=0.20/ε_high=0.28 治熵坍塌）；梯度裁剪裁梯度范数/值（优化器层，step 前防爆）；三 clip 家族对照表；PPO 训练两者叠加用但层次不同；3 误区含"Higher=上界抬高非裁更严""是缓解非消除"）
 
 ## 一、ML/深度学习基础 / 训练工程基础
 
@@ -419,6 +424,12 @@
 ### [[异步memcpy与pinned memory]]
 
 - [[异步memcpy与pinned memory]] — data loader 是什么？（**行内型**：PyTorch/框架的训练数据迭代器——把 Dataset 按 batch_size/shuffle/num_workers/pin_memory/collate_fn 自动切成一批批 batch 喂训练循环，并把"取样本+拼 batch+拷到 GPU"放到后台 worker 与 GPU 计算并发藏延迟；关键参数表(num_workers/pin_memory/drop_last/collate_fn/prefetch_factor)；与本笔记关系=它是 pinned+async 的用户层入口，三件套=num_workers>0 + pin_memory=True + .to('cuda', non_blocking=True) 缺一不可；四误区——pin_memory 单独不快要 worker 配、num_workers 不是越多越好挤 RAM、DataLoader 还管 shuffle+collate+padding+DistributedSampler 不只取数据、推理也用 DataLoader；LLM 训练数据管线 Arrow/Parquet→tokenize→IterableDataset→DataLoader→non_blocking .to('cuda)→与 forward 并发，pipeline bottleneck 时 GPU 利用率 95%→60%）
+## 十六、推理引擎源码 / PagedAttention
+
+### [[PagedAttention]]
+
+- [[PagedAttention]] — "在线（online）softmax"的"在线"体现在哪里？没看明白（**行内型**：online=算法术语 online algorithm，指数据流式逐块到来 + running 状态(m/l/acc)增量更新 + 单遍完成，区别传统"先扫一遍求全局 max 再扫一遍加权求和"的两遍扫描；动机=block 物理不连续只能逐块循环 + 数值稳定必须减 max 又不能两遍扫 → running max 把两遍合一；2 block × 2 score 小例子逐步推导 running 量演化，与传统全局 max 结果严格等价(36.36)只差访存遍数；与 [[Flash Attention]] 同源；4 误区含"online 不是在线推理/在线训练""不是近似是精确""先求 max 和 running max 结果相同差访存""漏 e^(m_old-m_new) rescale 会错"）
 
 ---
+
 相关: [[整体目录]]、[[张量与自动微分]]、[[优化器]]、[[训练工程基础]]、[[Transformer基础]]、[[03-PyTorch与框架工程]]

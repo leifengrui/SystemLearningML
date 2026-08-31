@@ -207,7 +207,7 @@ print(f"FP16 KV: {fp16:.2f} GB  ->  FP8 KV: {fp8:.2f} GB  (省 {(1-fp8/fp16)*100
 
 ## 6. 与其他知识点的关系
 
-- **上游（依赖）**: [[数值类型与精度]]（FP8 的位级结构 E4M3/E5M2 在那篇详述，本篇讲怎么用）、[[mixed precision training]]（FP8 是 BF16 AMP 的进一步量化）、Transformer Engine / Blackwell 硬件（FP8 Tensor Core 原生支持）。
+- **上游（依赖）**: [[数值类型与精度]]（FP8 的位级结构 E4M3/E5M2 在那篇详述，本篇讲怎么用）、[[块缩放浮点格式]]（MXFP8/NVFP4/HiF4 的块缩放机制本身在那篇深挖，本篇 §8.1 一段带过、§3.2 per-block 行即其应用）、[[mixed precision training]]（FP8 是 BF16 AMP 的进一步量化）、Transformer Engine / Blackwell 硬件（FP8 Tensor Core 原生支持）。
 - **下游（应用）**: [[训推不一致]]（本笔记是其中"精度路径"行的展开，FP8 方案差异是 TIM 主因之一）、[[KV cache management]] §3.4（FP8 KV cache 是推理显存省 2× 的主流手段）、[[量化]]（待建总览，FP8 是浮点量化分支，INT8/INT4 是定点量化分支）。
 - **对比 / 易混**:
   - **FP8 vs INT8**：浮点 vs 定点。FP8 浮点自带指数覆盖大动态范围、无需反量化查表、对训练友好；INT8 定点均匀台阶、需反量化、对大动态范围张量差。LLM 训推 Hopper+ 偏 FP8，边缘/老硬件偏 INT8。

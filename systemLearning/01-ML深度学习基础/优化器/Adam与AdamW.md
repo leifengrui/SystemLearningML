@@ -136,6 +136,25 @@ print(state.keys())          # dict_keys(['step', 'exp_avg', 'exp_avg_sq'])
 - **上游（依赖）**: [[SGD]]、[[Momentum]]（一阶矩即动量）、[[backward过程]]。
 - **下游（应用）**: [[学习率调度]]（warmup+cosine 配 AdamW）、[[loss scaling]]（fp16 训练）、[[mixed precision training]]、[[数值类型与精度]]（bf16 下 eps/grad_norm 注意）、LLM 预训练/微调全流程。
 - **对比 / 易混**（核心对比表）:
+# 用一个类比理解 Adam
+
+假设你在下山。
+
+SGD：
+
+> 只看现在脚下坡度，然后按照固定步长走。
+
+Momentum：
+
+> 不仅看脚下，还看过去几步总体是在往哪个方向下。
+
+Adaptive LR：
+
+> 不同地形用不同步长。
+
+Adam：
+
+> **根据过去的行走方向判断应该往哪里走，同时根据地形陡峭程度自动调整步幅。**
 
 | 优化器 | 自适应(逐参数) | 动量 | 权重衰减 | 典型场景 |
 |---|---|---|---|---|

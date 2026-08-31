@@ -3,6 +3,9 @@
 > **所属章节**: [[整体目录#五、LLM RL（RLHF / RLAIF）|对齐算法]]
 > **所属模块**: [[整体目录#五、LLM RL（RLHF / RLAIF）|05-LLM-RL对齐]]
 
+> **论文全文翻译**: [[论文全文翻译/DAPO论文全文中文翻译]]
+> **动态采样系统对照**: [[17-RL训推一体框架/采样工程/DAPO动态采样与AsyncFlow实现对照]]
+
 ## 1. 一句话定义
 
 **DAPO**（**D**ecoupled clip and **D**ynamic s**A**mpling **P**olicy **O**ptimization，解耦裁剪与动态采样策略优化）是字节跳动 Seed 团队 2025-03 提出的开源 LLM 强化学习算法（arXiv:2503.14476），在 GRPO 基础上叠加 **4 个关键 trick**（Clip-Higher / Dynamic Sampling / Token-Level Loss / Overlong Reward Shaping），专治 long-CoT（长思维链）RL 场景下 GRPO 的 **熵坍塌、梯度消失、奖励噪声、长度漂移**，用 Qwen2.5-32B 在 AIME 2024 拿到 50 分（DeepSeek-R1-Zero-Qwen-32B 同规模 47 分，DAPO 用其一半 step）。实现基于 [[verl]] 框架，代码+数据全开源。
@@ -228,6 +231,7 @@ return buffer
   - **vs [[GRPO]]**：DAPO = GRPO + 4 trick，group-relative advantage 同源；区别在 clip 解耦、token-level loss、dynamic sampling、length shaping
   - **vs vanilla PPO**：PPO 用 critic 估 value baseline，DAPO/GRPO 用 group-relative 不需 critic，省一个 value 网络显存
   - **vs [[DPO]]/[[IPO]]/[[KTO]]**：DPO 系是 offline 偏好对齐，不需在线 rollout；DAPO 是 online RL，需 rollout worker 实时采
+  - **Clip-Higher vs [[梯度裁剪]]**：名字都带 clip 易混，但层次不同——Clip-Higher 裁 importance ratio（损失层，本算法 Trick 1），梯度裁剪裁梯度范数/值（优化器层，step 前防爆）。PPO 训练两者叠加用。详见 [[梯度裁剪]] §6 callout。
 
 ## 7. 常见误区与易错点
 

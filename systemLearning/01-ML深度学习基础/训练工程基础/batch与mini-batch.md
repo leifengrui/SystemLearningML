@@ -7,7 +7,23 @@
 ## 1. 一句话定义
 
 **batch（批）** 是一次前向 + 反向所用的**样本子集**；**mini-batch（小批）** 指用"几十~几千样本"的小批做 [[SGD]] 更新，介于全量（BGD）和单样本（纯 SGD）之间，是深度学习标准训练单元；batch size 就是这一批的样本数 $|B|$。
+[[扩展阅读  verl中的batch]]
 
+简单说：
+
+- **Global batch size**：一次训练总共使用多少条样本，verl 中常见是 `data.train_batch_size`。
+- **Mini-batch**：把 global batch 再切小，PPO 每次更新用多少条，配置是 `ppo_mini_batch_size`。
+- **Micro-batch**：为了省显存，把 mini-batch 再切小；每张 GPU 一次处理多少条，配置是 `ppo_micro_batch_size_per_gpu`，多次累积梯度后才 `optimizer.step()`。
+
+例如：
+
+```
+train_batch_size=1024
+ppo_mini_batch_size=256
+ppo_micro_batch_size_per_gpu=8
+```
+
+含义是：一轮有 1024 条数据，每次 PPO 更新 256 条，每张 GPU 一次只算 8 条，算完多个 micro-batch 后再更新参数。
 ## 2. 为什么需要它（动机与背景）
 
 三个极端都不好用：

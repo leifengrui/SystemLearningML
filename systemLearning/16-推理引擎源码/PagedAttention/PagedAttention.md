@@ -150,7 +150,37 @@ $$\text{util} = \frac{\sum_i \lceil L_i / B \rceil \cdot B}{\text{KV pool 总 bl
 $B$=block_size（16）。碎片仅 $\lceil \rceil$ 的尾部（$< B$ token，最多 15），可忽略。显存利用 ~90%。
 
 ### 4.3 在线 softmax（数值稳定）
-【user】在线体现在哪里？没看明白。
+> [!note] 解答："在线（online）softmax"的"在线"体现在哪里
+> 一句话：**"在线"= 数据一块一块流式到来、每来一块就立即增量更新结果、扫完即得最终答案，不需要等全部数据到齐后再一次性算**。这是相对"离线 / 批处理 / two-pass"而言的——传统 softmax 要**先扫第一遍**求全局 max $M=\max_j s_j$、**再扫第二遍**算分母 $l=\sum_j e^{s_j-M}$ 和分子，是"两遍扫描"的离线做法；online softmax 把这两遍**合并成一遍**。
+>
+> "在线"在本节具体体现为**三处**：
+> 1. **数据流式到来**：K/V 在物理上是散布的非连续 block，attention kernel 是"按 block 循环遍历 block table"，K/V 一块一块进入计算，来一块算一块——这正是"在线"处理数据的形态。
+> 2. **状态滚动（running）增量更新**：维护三个滚动累积量——running max $m$、running sum $l$、running acc（加权输出）。每来一个新 block，用递推公式把它们**增量更新**，绝不回头重算前面已处理过的 block。
+> 3. **单遍完成**：扫完最后一个 block 时，$o=\text{acc}/l$ 已经是最终结果，**全程只访问每个 block 一次**。而传统做法必须先扫完全部 block 拿到全局 max，才能开始加权求和（两遍访存）。
+>
+> 为什么 PagedAttention 非用 online 不可（动机）：
+> - **物理上 block 不连续** → kernel 本就只能逐 block 循环，天然是流式，不可能"先全局扫一遍求 max"那样廉价地访存连续大张量；
+> - **数值上必须减 max** → 直接算 $e^{s_j}$ 会溢出（$s_j$ 可达几十，$e^{50}\approx 5\times10^{21}$），必须减去当前已知 max 做归一；
+> - **又不能两遍扫** → block 散布、两遍访存代价翻倍且 block table 要遍历两次。于是用 running max 把"求 max"和"加权求和"**合并成同一遍循环**，max 遇到更大的就回头把已累积的 $l,\text{acc}$ 一起 rescale（乘 $e^{m_\text{old}-m_\text{new}}$）修正。这就是下式递推的来历，与 [[Flash Attention]] 同源（FlashAttention 也是为了 tiling 后单遍计算而发明这套 online softmax 的）。
+>
+> **小例子：2 个 block、每 block 2 个 score，看 running 量怎么滚**
+> 设 scores $=[2,3]$(block1) $+[1,5]$(block2)，对应 $V=[10,20,30,40]$。$m,l,\text{acc}$ 初始为 $m=-\infty,\;l=0,\;\text{acc}=0$。
+>
+> | 阶段 | 处理 block | $m$（running max） | $l$（running sum） | $\text{acc}$（running output） |
+> |---|---|---|---|---|
+> | 处理 block1 $[2,3]$ | — | $m_1=\max(-\infty,3)=3$ | $l_1=e^{2-3}+e^{3-3}=0.3679+1=1.3679$ | $\text{acc}_1=0.3679\!\times\!10+1\!\times\!20=23.679$ |
+> | 处理 block2 $[1,5]$ | $m_\text{old}=3$ 被刷新 | $m_2=\max(3,5)=5$ | $l_2=e^{3-5}\!\times\!1.3679+(e^{1-5}+e^{5-5})=0.1851+0.0183+1=1.2034$ | $\text{acc}_2=e^{3-5}\!\times\!23.679+e^{1-5}\!\times\!30+e^{5-5}\!\times\!40=3.204+0.549+40=43.753$ |
+> | 最终输出 | — | $m=5$ | $l=1.2034$ | $o=\text{acc}/l=43.753/1.2034\approx36.36$ |
+>
+> 注意 block2 里 $m$ 从 3 涨到 5 时，旧累积量 $l_1,\text{acc}_1$ 被 $e^{3-5}=e^{-2}\approx0.1353$ **rescale 修正**了——这正是 $e^{m_\text{old}-m_\text{new}}$ 那一因子的作用：max 一旦变大，之前按较小 max 归一的累加就要"缩水"重对齐到新 max。
+>
+> **与传统两遍扫描等价性的验证**：用传统全局 max $M=5$ 一次性算，分母 $l=e^{2-5}+e^{3-5}+e^{1-5}+e^{5-5}=0.0498+0.1353+0.0183+1=1.2034$，输出 $o=(0.0498\!\times\!10+0.1353\!\times\!20+0.0183\!\times\!30+1\!\times\!40)/1.2034=43.753/1.2034\approx36.36$。**与 online 单遍结果完全一致**——online 只是把同样的计算重排成流式增量、并把"求 max"融进同一遍循环，数学上严格等价，但只需一遍访存且数值稳定（全程减当前 max，无溢出）。
+>
+> **常见误区**：
+> - ❌ 以为"在线"指"在线推理 vs 离线训练"——不是。这里的 online 是**算法术语 online algorithm**（流式单遍算法），与训练/推理的在线离线无关，PagedAttention 在离线批量推理里照样用 online softmax。
+> - ❌ 以为 online softmax 是一种近似——它是**精确等价**的（见上验证），不是近似；近似的是 int8/fp8 量化那种。
+> - ❌ 以为"先求全局 max 再算"和"running max"结果不同——数学上完全相同，差别只在**访存遍数**（2 遍 vs 1 遍）和**能否处理非连续 block 流式**。
+> - ❌ 漏看 $e^{m_\text{old}-m_\text{new}}$ rescale 因子——它是 online 能保持正确性的关键，max 增大时必须回头缩放旧累积量，漏了结果就错。
 
 传统 attention：$\text{attn}(Q, K, V) = \text{softmax}(QK^T / \sqrt{d}) V$，需先算全局 max $\max_j (QK_j)$。
 

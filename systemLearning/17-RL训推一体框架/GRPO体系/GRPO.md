@@ -5,6 +5,9 @@
 > **别名**: Group Relative Policy Optimization / 组内相对策略优化 / 组相对优势 / 去 critic 的 PPO
 > **难度**: 高（需懂 [[REINFORCE]]、[[PPO clipped objective]]、[[advantage function]]、[[baseline]]、[[variance reduction]]、[[value network]]）
 
+> **论文全文翻译**: [[论文全文翻译/DeepSeekMath_GRPO论文全文中文翻译]]
+> **GSPO 论文全文翻译**: [[论文全文翻译/GSPO论文全文中文翻译]]
+
 
 ## 1. 一句话定义
 
