@@ -10,7 +10,14 @@ aliases: [NCCL核心机制, NCCL核心价值, ring all-reduce机制]
 
 ## 1. 一句话定义
 
-**NCCL 核心机制**指 NVIDIA **NCCL（NVIDIA Collective Communication Library）** 之所以能在 GPU 多卡训练里成为事实标准后端的**五条底层能力**：① **ring all-reduce 算法**（通信量降到 $\approx 2M$ 且无单点瓶颈）；② **拓扑感知**（自动探测 NVLink/PCIe/IB 并建最优通信图）；③ **GPUDirect RDMA**（跨机 GPU 直接到网卡不绕 CPU 内存）；④ **CUDA kernel 融合**（通信本身是 GPU kernel，可与计算 stream 异步 overlap）；⑤ **算子丰富**（all-reduce/all-gather/reduce-scatter/broadcast/all-to-all 全套，且支持 async）。它是对 [[NCCL backend]] §2 "为什么需要 NCCL"那五点的逐条展开，是 DDP/FSDP/TP 通信性能的地基。本笔记由 [[NCCL backend]] 批注"这几点可以展开讲一讲 甚至新建文件"触发而独立成篇。
+**NCCL 核心机制**指 NVIDIA **NCCL（NVIDIA Collective Communication Library）** 之所以能在 GPU 多卡训练里成为事实标准后端的**五条底层能力**：
+① **ring all-reduce 算法**（通信量降到 $\approx 2M$ 且无单点瓶颈）；
+② **拓扑感知**（自动探测 NVLink/PCIe/IB 并建最优通信图）；
+③ **GPUDirect RDMA**（跨机 GPU 直接到网卡不绕 CPU 内存）；
+④ **CUDA kernel 融合**（通信本身是 GPU kernel，可与计算 stream 异步 overlap）；
+⑤ **算子丰富**（all-reduce/all-gather/reduce-scatter/broadcast/all-to-all 全套，且支持 async）。
+
+它是对 [[NCCL backend]] §2 "为什么需要 NCCL"那五点的逐条展开，是 DDP/FSDP/TP 通信性能的地基。本笔记由 [[NCCL backend]] 批注"这几点可以展开讲一讲 甚至新建文件"触发而独立成篇。
 
 > [!note] 为什么单独拎出来
 > [[NCCL backend]] 那篇讲的是"NCCL 是什么、怎么用、怎么调环境变量"，是**面向 API 的工程笔记**。本篇讲的是 NCCL **为什么快**——五条机制各自的算法原理、数学推导、硬件协同、性能量级。两者互补：那篇管"会用"，本篇管"懂为什么"。调性能时遇到"为什么我的 all-reduce 慢""为什么跨机慢一两个量级""为什么 overlap 不起来"，答案都在这五条里。

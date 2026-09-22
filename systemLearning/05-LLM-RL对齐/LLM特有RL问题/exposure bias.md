@@ -236,4 +236,4 @@ exposure bias 与 LLM 幻觉（hallucination）部分相关：
 - 加噪前缀后模型输出崩 → 未见错误前缀的暴露。
 
 ---
-相关: [[LLM特有RL问题]]、[[SFT]]、[[PPO optimization]]、[[RLHF (PPO)]]、[[DPO]]、[[MDP]]、[[mode collapse]]、[[policy collapse]]、[[reward hacking]]、[[KL explosion]]、[[RLAIF]]、[[teacher forcing]]
+相关: [[LLM特有RL问题]]、[[SFT]]、[[PPO optimization]]、[[RLHF (PPO)]]、[[DPO]]、[[MDP]]、[[mode collapse]]、[[policy collapse]]、[[reward hacking]]、[[KL explosion]]、[[RLAIF]]、[[teacher forcing]]、[[On-Policy Distillation]]

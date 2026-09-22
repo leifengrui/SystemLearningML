@@ -10,6 +10,12 @@
 > [!warning] arXiv 号澄清
 > 正确 ID 是 **2602.04879**（2026 年 2 月）。曾被误传为 2502.04879——后者实为无关统计论文《Statistical Collusion by Collectives on Learning Platforms》。本条按已核实 2602.04879。
 
+> [!warning] 缩写撞车：本条 ≠ [[Decoupled PPO]]
+> 两者都叫 DPPO 但完全不同：
+> - **本条 Divergence Proximal PO**（Qi et al. 2026，Sea AI）——散度替代 ratio clip，纠长尾偏差。
+> - **[[Decoupled PPO]]**（Hilton/Cobbe/Schulman 2021，OpenAI，arXiv:2110.00641）——解耦近端策略与行为策略，目标 batch size 不变性，是 verl 三策略框架的理论基础。
+> 记忆：**Divergence=散度替ratio；Decoupled=解耦两策略角色**。
+
 ## 1. 一句话定义
 
 **DPPO（Divergence Proximal Policy Optimization）** 主张用**策略散度（TV/KL）直接估计**替代 PPO 的**概率 ratio 截断**作信任域——因 PPO 的 token 级 ratio 是真实散度的**单样本 MC 估计**，在长尾词表上结构性有偏（低概率 token 被过度惩罚、高概率 token 惩罚不足）；DPPO 用 **Binary-KL / Binary-TV / Top-K** 三种散度近似，给出自适应 ratio 界 $|r-1|\le\delta/\mu$（界与行为概率 $\mu$ 成反比，恰好抵消长尾偏差），在 MoE 上**无需 [[R3 rollout routing replay]] 也能稳定训练**。
@@ -114,6 +120,7 @@ def dppo_mask(mu_a, pi_a, A, r, delta=0.15):
   - **DPPO（散度 mask）vs [[GSPO]]（序列 ratio clip）**：DPPO 改代理（ratio→散度）；GSPO 改粒度（token→序列）。DPPO 解决 GSPO 遗留的 ratio-as-proxy。
   - **DPPO（硬 mask）vs [[DRPO]]（平滑正则）**：DPPO 边界处梯度直接置零（丢弃）；DRPO 平滑阻尼（修正）。DRPO 暴露 DPPO 硬 mask 的局限。
   - **DPPO vs [[TRM]]**：DPPO token 级散度 mask；TRM 序列级散度界 mask。粒度与界推导不同。
+  - **DPPO（Divergence）vs [[Decoupled PPO]]**：同名缩写撞车。本条散度替 ratio；Decoupled 解耦近端/行为策略求 batch size 不变性。
 
 ## 7. 常见误区与易错点
 
@@ -138,4 +145,4 @@ verl 仅实现 Binary-KL（`LOSS_MODE=dppo_kl`）与 Binary-TV（`LOSS_MODE=dppo
 Binary-KL/TV/Top-K 公式、自适应界 $\propto1/\mu$、长尾偏差 bound、mask 定义、Fig.8 DPPO>R3、Fig.4 recompute 崩、TIS 恶化、AlpacaEval 80.90 均来自 arXiv:2602.04879 全文已联网核实。verl/Stable-RL 实现已核实。截至 2026-09。
 
 ---
-相关: [[训练推理不一致TIM技术综述]] | [[GSPO]] | [[DRPO]] | [[importance sampling与off-policy correction]] | [[PPO clipped objective]] | [[R3 rollout routing replay]] | [[TRM]] | [[17-RL训推一体框架]]
+相关: [[训练推理不一致TIM技术综述]] | [[GSPO]] | [[DRPO]] | [[Decoupled PPO]] | [[importance sampling与off-policy correction]] | [[PPO clipped objective]] | [[R3 rollout routing replay]] | [[TRM]] | [[17-RL训推一体框架]]

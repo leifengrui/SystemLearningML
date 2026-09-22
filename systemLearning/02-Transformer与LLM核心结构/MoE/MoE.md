@@ -7,7 +7,7 @@
 ## 1. 一句话定义
 
 **MoE（Mixture of Experts，专家混合，混合专家）** 是把 Transformer 的 [[FFN]] 换成**多个并行的"专家"FFN + 一个路由器**的稀疏架构：每个 token 只被路由到 **top-k 个专家**计算，其余专家不激活——从而**解耦"模型总参数量"与"每 token 计算量"**，用同样的算力训练容量大得多的模型。一句话定位：**MoE = 用稀疏激活换更大容量**，总参数 $\gg$ 激活参数。
-
+激活-》参与计算
 ## 2. 为什么需要它（动机与背景）
 
 ### 2.1 Dense 模型的瓶颈：参数量 = 计算量
@@ -75,7 +75,38 @@ MoE 通常**只替换 FFN 子层**，[[多头注意力]]保持 dense（attention
 ```
 
 - **专家（Expert）**：每个专家就是一个独立的 FFN（标准或 [[SwiGLU]]），参数不共享；
-- **路由器（Router / Gate）**：一个小线性层 $W_g \in \mathbb{R}^{d \times E}$，对每个 token 算 $E$ 个专家的分数，选 top-k；
+- **路由器（Router / Gate）**：一个小线性层 $W_g \in \mathbb{R}^{d \times E}$，对每个 token 算 $E$ 个专家的分数，选 top-k。
+
+> [!note] 解答：路由器怎么选出 top-k 个专家
+> 
+> 选 top-k 是一个**"打分 → 取最大 k 个 → 归一化作权重 → 加权求和"**的四步过程，全程对每个 token 独立做：
+> 
+> **第 1 步：打分（router / gate）**
+> 每个 token 的 hidden state $x\in\mathbb{R}^d$ 经一个小线性层 $W_g\in\mathbb{R}^{d\times E}$，得到 $E$ 个专家各自的"得分"logits：
+> 
+> $$\text{logits} = x\,W_g \in \mathbb{R}^{E}$$
+> 
+> 普通 $d\to E$ 矩阵乘，每个专家一个标量分数。$W_g$ **可学习**（路由器本身也是模型参数，靠梯度训练学会"哪种 token 该找哪个专家"）。
+> 
+> **第 2 步：取 top-k（离散选择，不可导）**
+> 从 $E$ 个分数里挑**分数最大的 $k$ 个**专家索引 $\{i_1,\dots,i_k\}$。例 $E=8,k=2$：8 个分数取最大两个下标。未被选中的 $E-k$ 个专家**不参与前向**（省算力）、**也不参与反向**（梯度为 0，§3.5 路由不可导的根源）。
+> 可选变体：**Noisy top-k gating**（Shazeer 2017 原版）打分时加 Gumbel 噪声 $\text{logits} = xW_g + \epsilon\cdot\text{Gumbel}(0,1)$，逼路由器探索、防一开始就锁死少数专家（防专家坍缩）。
+> 
+> **第 3 步：归一化作加权权重**
+> 对选中的 $k$ 个分数做 **softmax**（只在 k 个里归一，非选中置 0）：
+> 
+> $$g_i = \frac{\exp(\text{logits}_i)}{\sum_{j\in\text{top-k}}\exp(\text{logits}_j)},\ i\in\text{top-k};\quad g_i=0\text{ 否则}$$
+> 
+> **只对 top-k 内做 softmax**（不对全部 $E$ 个做），未选中专家权重严格为 0、不会偷偷贡献计算。Mixtral/DeepSeek 都用这套。
+> 
+> **第 4 步：分发与加权求和**
+> 把 token $x$ 送入选中的 $k$ 个专家各算一遍，按 $g_i$ 加权求和：
+> 
+> $$y = \sum_{i\in\text{top-k}} g_i \cdot \text{Expert}_i(x)$$
+> 
+> Mixtral 8×7B（$E=8,k=2$）：每 token 算 2 个专家按 softmax 权重相加；DeepSeek-V3（$E=256,k=8$）：256 个选 8 个，专家更细。
+> 
+> **梯度怎么流**：$W_g$ 通过 softmax 后的 $g_i$ 可导，梯度能流回路由器；但"选哪 k 个"这个**离散 argmax 选择本身不可导**，未选中专家拿不到梯度——这正是 MoE 训练难的根源（§3.5）。负载均衡损失 / DeepSeek 偏置均衡就是从外部打破这个不可导死结。详见 [[MoE路由]]、[[负载均衡损失]]。
 - **典型配置**：$E=8/64/256$ 个专家，每 token 选 $k=1/2$ 个。
 
 ### 3.3 现代 MoE 模型实例
@@ -151,7 +182,33 @@ $$
 - 注意力层保持 dense，每个 token 都算，所以 $N_{\text{attn}}$ 在两者里都全额计入；
 - 路由器 $N_{\text{router}} = d \cdot E$（小，通常忽略）；
 - 稀疏只发生在 FFN 专家部分：$\frac{N_{\text{激活}}}{N_{\text{总}}}\big|_{\text{FFN}} = \frac{k}{E}$。
-
+> [!note] 解答：MoE 典型结构是"一层 dense + 一层专家"交替吗？
+> 
+> **不完全是。主流有三种布局，"dense + MoE 交替"只是其一，且不是 Mixtral 的做法。** 以下数字均经联网核实（Mixtral 论文 arXiv:2401.04088 / DeepSeek-V3 技术报告 arXiv:2412.19437 / Switch Transformer arXiv:2101.03961）。
+> 
+> **布局 A：全 MoE（每层 FFN 都换成 MoE）**
+> - 每层都是 attention + MoE-FFN，无 dense FFN。
+> - 代表：**Mixtral 8×7B**（32 层全是 MoE）。Mixtral 论文明确写 "we replace **all** FFN sub-blocks by MoE layers while GShard replaces every other block"——直接把 Mistral 7B 每层 FFN 换成 8 专家 MoE。
+> - 优点：每层都享稀疏激活的容量红利；结构最简单、实现统一。
+> - 缺点：每层都路由 + All-to-All 通信，工程与通信开销最大；浅层用 MoE 性价比低。
+> 
+> **布局 B：dense + MoE 交替（隔层 / 每 N 层一个 MoE）**
+> - 一部分层保留 dense FFN，一部分换 MoE，典型每隔 1 层插一个 MoE。
+> - 代表：**GShard**（"replaces **every other** block"，隔层一个 MoE）、**Switch Transformer**（"experts at **every other** feed-forward layer"，隔层一个 Switch MoE，且用 top-1 路由）。
+> - 优点：路由通信开销减半甚至更少；dense 层提供稳定信息加工路径，训练更稳；浅层 dense 学通用特征、深层 MoE 学专业知识。
+> - 缺点：容量红利不如全 MoE。
+> 
+> **布局 C：前几层 dense + 其余 MoE + shared expert（现代细粒度 MoE 主流）**
+> - **浅层（前 N 层）用 dense FFN**，**深层用 MoE**，且常配 **shared expert（共享专家，总是激活）** 捕捉通用知识。
+> - 代表：**DeepSeek-V3**——技术报告原话 "We substitute all FFNs **except for the first three layers** with MoE layers. Each MoE layer consists of **1 shared expert** and **256 routed experts**"。即 61 层中前 3 层 dense（layers 0-2）、后 58 层 MoE（layers 3-60），每 MoE 层 1 共享 + 256 路由专家、每 token 激活 8 个路由专家。Qwen-MoE 等细粒度 MoE 同理。
+> - 优点：浅层 dense 稳定提取底层语言特征（语法、词法），不需专家化；深层 MoE + shared expert 兼顾专业化与通用性，是当前细粒度 MoE 的工程最优解。
+> 
+> **为什么不全用 MoE？三个理由：**
+> 1. **浅层不需要专家化**：浅层学通用底层特征（token embedding、语法），所有 token 都要相似加工，专家化收益小、反增路由不稳。
+> 2. **dense 层是稳定锚点**：MoE 路由有不可导问题（§3.5），全 MoE 训练更易发散；穿插 dense 层提供稳定密集计算路径，梯度流通更顺。
+> 3. **通信开销**：每层 MoE 都要 All-to-All 把 token 发到对应专家所在卡（见 [[专家并行]]），层数越多通信越重；隔层或浅层 dense 可减半通信。
+> 
+> **一句话**：Mixtral 是"全 MoE"特例（简单直接，来自 dense 模型直接改造），DeepSeek-V3 是"前 dense + 后 MoE + shared expert"现代主流（工程更优）。你说的"一层 dense + 专家"接近布局 B/C，但更准确是"**部分层 dense + 部分层 MoE**"或"**前几层 dense + 后面 MoE**"，不是严格的"1 dense : 1 MoE"交替（GShard/Switch 才是隔层交替）。详见 §3.2 结构图、§8.1 历史脉络。
 ### 4.2 计算量
 
 训练计算量公式 $C \approx 6 N_{\text{激活}} D$ 仍然成立，但 **$N$ 是激活参数**（见 [[FLOPs计算]]）：
@@ -170,65 +227,6 @@ $$
 - 8 个专家 FFN 总参数 $\approx 8 \times 176\text{M} \approx 1.4\text{B}$/层；
 - 激活 FFN 参数（2 个专家）$\approx 2 \times 176\text{M} \approx 352\text{M}$/层；
 - 32 层 FFN 总参数 $\approx 45\text{B}$，激活 $\approx 11\text{B}$（加注意力等约 47B 总 / 13B 激活，与公开数据吻合）。
-
-## 5. 代码示例
-
-```python
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-class MoELayer(nn.Module):
-    """最小 MoE FFN 层：E 个 SwiGLU 专家 + top-k 路由。"""
-    def __init__(self, d, d_ff, num_experts=8, top_k=2):
-        super().__init__()
-        self.E = num_experts
-        self.k = top_k
-        # 路由器：d -> E 个分数
-        self.gate = nn.Linear(d, num_experts, bias=False)
-        # E 个独立专家（每个是一个 SwiGLU FFN），用 ModuleList
-        self.experts = nn.ModuleList([
-            nn.ModuleDict({
-                'w_gate': nn.Linear(d, d_ff, bias=False),   # SwiGLU gate 路
-                'w_up':   nn.Linear(d, d_ff, bias=False),   # SwiGLU up 路
-                'w_down': nn.Linear(d_ff, d, bias=False),   # 降维
-            }) for _ in range(num_experts)
-        ])
-
-    def forward(self, x):                       # x: (B, n, d)
-        B, n, d = x.shape
-        x_flat = x.reshape(-1, d)               # (B*n, d)：把 token 拉平处理
-        logits = self.gate(x_flat)              # (B*n, E)：每个 token 对 E 专家的分数
-        # 选 top-k 专家
-        topk_vals, topk_idx = logits.topk(self.k, dim=-1)   # (B*n, k)
-        topk_w = F.softmax(topk_vals, dim=-1)               # 对 k 个分数 softmax
-        # 计算每个被选专家的输出并加权
-        out = torch.zeros_like(x_flat)                       # (B*n, d)
-        for i in range(self.k):                              # 遍历 k 个槽位
-            expert_ids = topk_idx[:, i]                      # (B*n,)：第 i 槽选的专家
-            w = topk_w[:, i:i+1]                             # (B*n, 1)：该槽权重
-            for e in range(self.E):                          # 遍历专家(简化,实际用 gather 优化)
-                mask = (expert_ids == e)                     # 哪些 token 在此槽选了专家 e
-                if mask.any():
-                    xe = x_flat[mask]                        # 取出这些 token
-                    exp = self.experts[e]
-                    h = F.silu(exp['w_gate'](xe)) * exp['w_up'](xe)  # SwiGLU
-                    h = exp['w_down'](h)
-                    out[mask] += w[mask] * h                 # 加权累加
-        return out.reshape(B, n, d)                          # (B, n, d)
-
-# 验证
-moe = MoELayer(d=512, d_ff=1366, num_experts=8, top_k=2)    # 8 专家, top-2
-x = torch.randn(2, 16, 512)
-print("MoE 输出:", moe(x).shape)                              # (2, 16, 512)
-n_total = sum(p.numel() for p in moe.parameters())
-print(f"总参数: {n_total:,}")                                 # 含 8 个专家
-# 激活参数 ≈ 2 个专家 + gate，约为总参数的 2/8 = 1/4（FFN 部分）
-```
-
-> [!tip] 实现要点
-> 上面用 Python for 従环遍历专家是为了讲清原理，**实际工程里**用 `torch.scatter` / `grouped_mm` 把同一专家的 token 打包批量算，避免 for 循环开销。MoE 的工程实现（[[专家并行]]）比数学公式复杂得多。
-
 ## 6. 与其他知识点的关系
 
 - **上游（依赖）**: [[FFN]]（MoE 是 FFN 的稀疏化，把一个大 FFN 换成多个小 FFN）、[[decoder-only architecture]]（MoE 层替换其中的 FFN 子层）、[[SwiGLU]]（现代 MoE 专家多用 SwiGLU FFN）、[[FLOPs计算]]（$C \approx 6ND$ 中 $N$ 是激活参数）、[[参数量计算]]。

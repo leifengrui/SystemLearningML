@@ -74,6 +74,11 @@
 ### [[FFN]]
 
 - [[FFN]] — 这一章没看懂，重写本章节（已应反馈重写：加白话类比"attention=课堂讨论/FFN=课后消化"、ASCII block 结构图、d=512 算参数例子、逐步推导位置独立与 SwiGLU 参数调整、误区针对初学者；核心=FFN 是每 token 独立的两层 MLP，干"加工+记忆"，与 attention"交流"互补，占 2/3 参数）
+- [[FFN]] — 为什么要升降维 起到了什么作用？（**行内型**：先扩后压信息加工结构——升维 d→4d 扩容量增可分性(可学习核映射/给非线性更多切口/记忆库更多 key)、非线性夹中间是唯一非线性来源否则退化线性连 XOR 都学不了、降维 4d→d 匹配残差维度+浓缩高维决策+控制参数量；三者缺一不可这就是"先升后降"形状原因）
+
+### [[多头注意力]]
+
+- [[多头注意力]] — head_dim 是什么？（**行内型**：每头 Q/K/V 向量维度 $d_k=d/h$；头数 h 定并行子空间数、head_dim 定每子空间多大，积=d 知二推一；三 trade-off=表达力/softmax 稳定(故 attention 除 $\sqrt{d_k}$)/KV cache 显存(每头每 token 存 $2d_k$)/RoPE 粒度；典型 64/128）
 
 ---
 
@@ -116,6 +121,8 @@
 - [[MoE]] — 这里的"算力"指显存吗？（不是；算力=FLOP 计算量、显存=bytes 存储；dense 都∝N 易混，MoE 解耦：算力按激活参数省、显存按总参数费）
 - [[MoE]] — 路由不可导"那又怎样"？（未选专家无梯度→冻死；路由器无法自我纠正→正反馈锁死→专家坍缩；必须靠负载均衡损失/偏置外部打破）
 - [[MoE]] — 什么是超参？（人设定不随梯度更新的配置量，对比参数=模型自学权重；MoE 常见 E/k/α/c/σ；MoE 比 dense 敏感需小心调）
+- [[MoE]] — 路由器怎么选出 top-k？（**行内型**：四步=打分 $x\cdot W_g$ 得 E 维 logits、取最大 k 个索引(离散不可导)、softmax 归一化作权重非选中置 0、分发 k 个专家按权重加权求和；Noisy top-k 加 Gumbel 噪声防坍缩；未选专家无梯度是 MoE 训练难根源）
+- [[MoE]] — 典型结构是一层 dense+专家吗？（**行内型+联网**：三种布局——全 MoE(Mixtral 32 层全换,论文原话"replace all FFN")、隔层交替(GShard/Switch "every other block",Switch 用 top-1)、前 N 层 dense+后 MoE+shared expert(DeepSeek-V3 61 层=3 dense+58 MoE,每 MoE 层 1 shared+256 routed,激活 8;技术报告原话)；不全 MoE 因浅层不需专家化+dense 稳锚+减通信；来源 Mixtral arXiv:2401.04088/DeepSeek-V3 arXiv:2412.19437/Switch arXiv:2101.03961 核实）
 
 ### [[负载均衡损失]]
 
@@ -180,6 +187,7 @@
 
 - [[NCCL backend]] — gloo 是什么？第一次听说 CPU 训练（**行内型**：gloo=Meta 开源 CPU 集合通信库，`torch.distributed` 的 `backend="gloo"`；与 NCCL 并列、按张量设备二选一；CPU 训练真实场景=小模型/调试/无GPU集群/DDP逻辑单元测试；gloo vs NCCL 对比表+代码+误区"GPU 张量→nccl，CPU 张量→gloo"）
 - [[NCCL核心机制]] — NCCL 五点核心价值展开/新建文件（**新建型**：①ring all-reduce 算法（通信量 $\frac{2(N-1)}{N}M\to2M$ 与 N 无关、无单点瓶颈）②拓扑感知（探测 NVLink/PCIe/IB 建 channel、自动选 ring/tree/collnet/nvls）③GPUDirect RDMA（跨机 GPU 直达网卡不绕 CPU 内存）④CUDA kernel 融合+stream overlap（async_op 独立 stream）⑤算子丰富全套（all-reduce/all-gather/reduce-scatter/broadcast/all-to-all/send-recv）+ async；附带宽量级表与调优经验值）
+- [[HCCL与昇腾通信栈]] — 联网扩展新一章 介绍华为的UB、HCCL（**新建型+联网**：华为昇腾 NPU 通信栈完整展开——HCCL=华为对标 NCCL 的集合通信库，CANN 组件，原语/算法与 NCCL 高度对齐（AllReduce/AllGather/ReduceScatter/AlltoAll/Send/Recv + Ring/Mesh/RHD）；UB（Unified Bus/灵衢）=华为从物理层到事务层统一互联协议，替代 PCIe+NVLink+RoCE 拼接，全对等架构+URMA 内存语义+Jetty/TP Channel 双层状态 O(N+M) vs RoCE O(N·M)、64B 远程读取 500 ns vs RoCE 2186 ns（4.37×）；UB-Mesh nD-FullMesh 拓扑 8192 NPU、单 lane 118 Gbps 以规模补单 lane 带宽；C-AQM 近零队列拥塞控制；HCCL_OP_RETRY_ENABLE 算子级重执行 L0/L1/L2 ~95% 成功率；两个 UB 误区（Unified Bus≠Unified Buffer、UB≠HCCS）；HCCS→UB 演进路线 910/920→950）
 
 ### [[rank与world size]]
 
@@ -205,6 +213,10 @@
 
 - [[Megatron-LM]] — 提到 FSDP 就该讲讲 Megatron，新建一页（**新建型**：Megatron-LM=TP+PP+DP 三维并行工业参考实现；与 FSDP 是两条省显存主流路线——FSDP 分片存储 all-gather 全量计算通信∝参数可跨节点，Megatron 真切分权重每卡只算一片通信∝激活不随模型变大但需 NVLink；列切/行切数学推导、MLP 夹心组合减通信、PP 1F1B/interleaved、并行交叉熵、selective recombination、Megatron vs FSDP 对比表、何时用哪个）
 - [[Megatron-LM]] — 联网搜索 megatron 到底和 fsdp 有什么区别和联系（**行内型+联网**：一句话=Megatron 真切权重每卡算一片通信∝激活需 NVLink 扩展≤8，FSDP 分片存储 all-gather 全量通信∝参数可跨节点扩展数百卡；正交可叠加(超大模型=TP+PP+ZeRO-3 工业配方)；血统不同(NVIDIA vs DeepSpeed/PyTorch FSDP2 DTensor)；正在 DTensor 层融合(Megatron 已内置 megatron-fsdp)；工程选型速记；来源 NVIDIA/PyTorch/ZeRO/Megatron 论文）
+
+### [[Context Parallel]]
+
+- [[Sequence Parallel]] — 新建一章 sequence parallel 联网调研（**新建型+联网**：经核查 SP 已作为独立笔记存在，原在 ch15 训练框架源码，已按用户指示迁至 ch03 并行训练小节（与 [[Context Parallel]] 同处，CP/SP 易混并列）；按 §9.4 去重不新建，改为联网深化现有笔记——补论文出处 arXiv:2205.05198 MLSys 2023、g/ḡ 共轭算子推导(等通信换显存)、精确激活公式 Eq.2→Eq.4、selective activation recompute 姊妹技术(SP+selective 组合 5× 降幅 MFU 42.1%→54.2%)、Megatron 源码工程约束 CUDA_DEVICE_MAX_CONNECTIONS=1/EP+TP 强制 SP/TP=1 不能开 SP；批注处 callout 指向 [[Sequence Parallel]]）
 
 ---
 

@@ -111,7 +111,7 @@ NCCL 启动时探测每个 GPU 对之间的连接类型（NVLink/PCIe/IB），�
 - **单机 NVLink**：8 卡通过 NVLink/NVSwitch 全连接，all-reduce 带宽数百 GB/s，延迟低。
 - **跨机 InfiniBand**：通过 GPUDirect RDMA，GPU 直接 DMA 到网卡，不经 CPU 内存；带宽受 IB（200/400 Gbps）限制，是跨机瓶颈所在。
 - **跨机无 IB（以太网）**：NCCL 也能走 TCP socket（`NCCL_SOCKET_IFNAME`），但带宽低、延迟高，不推荐大模型。
-
+> [!note] 已展开为独立笔记：[[HCCL与昇腾通信栈]] — 华为昇腾 NPU 的集合通信库 HCCL（对标 NCCL）与统一互联协议 UB / 灵衢（对标 NVLink+PCIe+RoCE 组合）。含软件架构、通信原语对照、UB 的 $O(N+M)$ 状态复杂度 vs RoCE 的 $O(N \cdot M)$、UB-Mesh nD-FullMesh 拓扑、C-AQM 拥塞控制、HCCL_OP_RETRY 算子级重执行等。
 ### 3.4 communicator 与 stream
 
 每个 [[process group]] 在 NCCL 下对应一个 **communicator**，绑定到一个 CUDA stream。通信默认在**默认 stream** 上同步执行，`async_op=True` 时放到独立 stream 可与计算 overlap。NCCL 通信本身是 GPU kernel，在 stream 上调度。
@@ -249,4 +249,4 @@ Hopper + NVSwitch 支持 **NVLink SHARP**：reduce 在交换机硬件完成，�
 多卡推理（TP=2+）也用 NCCL 做层间 all-reduce；vLLM/Ray Serve 多卡部署时 NCCL communicator 建立成本要摊到长生命周期。[[KV cache]] 的多卡分片有时也靠 NCCL all-gather 拼装。见 [[推理系统]]。
 
 ---
-相关: [[分布式基础]]、[[torch.distributed]]、[[process group]]、[[rank与world size]]、[[DDP]]、[[FSDP]]、[[Tensor Parallel]]、[[overlap strategy]]、[[NCCL核心机制]]、[[NCCL通信拓扑]]
+相关: [[分布式基础]]、[[torch.distributed]]、[[process group]]、[[rank与world size]]、[[DDP]]、[[FSDP]]、[[Tensor Parallel]]、[[overlap strategy]]、[[NCCL核心机制]]、[[NCCL通信拓扑]]、[[HCCL与昇腾通信栈]]

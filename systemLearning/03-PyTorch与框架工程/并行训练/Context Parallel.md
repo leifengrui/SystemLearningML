@@ -5,7 +5,15 @@
 > **别名**: Context Parallelism / CP / 序列并行（注意与 Sequence Parallelism 区分）/ Ring Attention / DeepSpeed Ulysses
 > **难度**: 中高（需懂 [[自注意力]] 的 $\mathcal{O}(S^2)$ 复杂度、[[KV cache]]、[[all-reduce]]/AllGather/点对点通信、3D 并行基础）
 > **资料时效**: 2026-07 核对 NVIDIA Megatron Core 官方文档与 Dynamic-CP 博客
-
+> [!note] 已展开为独立笔记：[[Sequence Parallel]]（联网调研已补）
+> 你要的"新建一章 sequence parallel 联网调研"——经核查，**[[Sequence Parallel]] 已作为独立笔记存在**，与本笔记同处 `03-PyTorch与框架工程/并行训练/` 小节（CP 与 SP 易混，并列放置便于对照）。按 §9.4「去重」原则不新建重复笔记，改为**联网深化现有笔记**，补入论文原文事实：
+> - **论文出处**：arXiv:2205.05198，"Reducing Activation Recomputation in Large Transformer Models"，Korthikanti et al., MLSys 2023（NVIDIA）。该论文**同时提出 SP 与 selective activation recompute** 两项技术。
+> - **g/ḡ 算子**：论文命名 SP 的两个转换器——$g$=进 TP 区（前向 all-gather/反向 reduce-scatter），$\bar{g}$=出 TP 区（前向 reduce-scatter/反向 all-gather），**共轭**。关键：把额外通信合并进 $f$/$\bar{f}$，因 ring all-reduce = reduce-scatter + all-gather，**总通信字节不变**（"等通信换显存"）。
+> - **精确公式**：TP 单层 $sbh(10+24/t+5as/h)$（Eq.2，10 项是 norm/dropout 的 replicated 地板）→ 加 SP 后 $\frac{sbh}{t}(34+5as/h)$（Eq.4，全项除 $t$）。$5as/h$ 是 attention 的 $S^2$ 项，SP 切不掉，靠 selective recompute 砍。
+> - **SP + selective 组合 = 5×**：SP 砍 34 项的地板（~30%），selective 重算 attention scores 砍 $5as/h$ 项（~70%），合起来单层激活降到 TP-only 的 ~20%，530B/2240 A100 实测 MFU 42.1%→54.2%（+29%），recompute 算力税从 30-40% 降到 ~3%。
+> - **工程约束**（Megatron 源码核实）：`CUDA_DEVICE_MAX_CONNECTIONS=1`（overlap 必需）、EP+TP 强制要求 SP、TP=1 不能开 SP、LayerNorm grad 需额外 all-reduce。
+>
+> 详见 [[Sequence Parallel]] §3.11（g/ḡ）、§4.1（精确公式）、§8.5（selective recompute）、§8.6（工程约束）。
 ## 1. 一句话定义
 
 **Context Parallelism（CP，上下文并行 / 序列并行）** 是把**输入序列的长度维度 $S$** 切成 $C$ 份分给 $C$ 张 GPU，每卡只持有 $S/C$ 个 token，从而把注意力 $\mathcal{O}(S^2)$ 的算力与 $\mathcal{O}(S)$ 的激活显存**按 $C$ 线性摊薄**的并行范式。与 [[Data Parallel|DP]]（切 batch）、[[Tensor Parallel|TP]]（切层内权重）、[[Pipeline Parallel|PP]]（切层间）正交，是**长序列训练（8K+ token，乃至百万级上下文）** 的标配。关键技术是**跨序列块注意力**：各卡只有自己那一段 token，但要算"本段 token 对全序列 token"的注意力，于是用 **Ring Attention**（环形 P2P 传 KV 块）或 **DeepSpeed Ulysses**（all-to-all 重排 head）让每卡都能访问到完整的 K/V。它是 [[Megatron-LM]] Core 一等公民（`--context-parallel-size`），在 LLaMA-3 70B/405B、DeepSeek-V3 等长上下文模型训练里是第 4~5 维并行。
