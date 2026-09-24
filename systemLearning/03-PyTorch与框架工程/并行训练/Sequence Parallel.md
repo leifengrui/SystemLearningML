@@ -18,7 +18,23 @@
 > - **为什么**：TP 只切 weight，norm 区激活仍 replicate（大序列长时显存瓶颈）。SP 把这些激活也切，省显存。
 > - **与 [[Tensor Parallel]] 关系**：SP 是 TP 的延伸（不独立），把 TP 块的 all-reduce 换 reduce-scatter + 加 all-gather 协同，activation 显存从"部分 replicate"变"全分片"。
 
+展开看：
 
+```
+             hidden维度
+              ↓
+token1  [0.1,0.2,...4096个数]
+token2  [0.3,0.5,...4096个数]
+token3  [...]
+token4  [...]
+ ↑
+sequence维度
+```
+
+所以：
+
+- **sequence 维度：有多少个 token**
+- **hidden 维度：每个 token 有多少个特征**
 ## 2. 为什么需要它（动机与背景）
 
 ### 2.1 TP 的激活显存盲区

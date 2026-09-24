@@ -6,13 +6,62 @@
 
 ## 1. 一句话定义
 
-**Actor-Critic（演员-评论家，A-C）** 是策略梯度方法的**两网络联合学习架构**：**actor（演员）** = 策略网络 $\pi_\theta(a\mid s)$，负责决策、被策略梯度直接优化；**critic（评论家）** = 价值网络 $V_\phi(s)$（见 [[value network]]），负责评估当前策略、给 actor 提供**低方差的 advantage 权重** $\hat A_t$（见 [[advantage estimation]]）。它把 [[REINFORCE]] 的"用实际 return $G_t$ 当权重、无偏但方差爆炸"升级为"用 critic 估的 $V_\phi$ 减底色、有偏但方差低、可在线"，是 [[A2C]]/[[A3C]]/[[PPO clipped objective]]/RLHF-PPO 的统一骨架。
+**Actor-Critic（演员-评论家，A-C）** 是策略梯度方法的**两网络联合学习架构**：**actor（演员）** = 策略网络 $\pi_\theta(a\mid s)$，负责决策、被策略梯度直接优化；
+**critic（评论家）** = 价值网络 $V_\phi(s)$（见 [[value network]]），负责评估当前策略、给 actor 提供**低方差的 advantage 权重** $\hat A_t$（见 [[advantage estimation]]）。
+它把 [[REINFORCE]] 的"用实际 return $G_t$ 当权重、无偏但方差爆炸"升级为"用 critic 估的 $V_\phi$ 减底色、有偏但方差低、可在线"，是 [[A2C]]/[[A3C]]/[[PPO clipped objective]]/RLHF-PPO 的统一骨架。
 
 > [!note] 三个叫法
 > - **Actor-Critic**：架构名（actor + critic 两半）。
 > - **A2C / A3C**：Advantage Actor-Critic 的同步/异步工业实现（OpenAI/DeepMind 2016）。
 > - **policy-critic / policy-value**：描述同一件事的非正式叫法。
 > 本条讲架构本身；A2C/A3C 的工程细节见 §8.1，PPO 见 [[PPO clipped objective]]。
+> 
+> 
+
+> [!note] 解答：reward 与 advantage 是什么，为何 Actor-Critic 用后者而非前者
+> 
+> 两者处在 RL 价值体系的不同层级，必须放一起看清整条链条（详见 [[return与reward]]、[[advantage function]]）：
+> 
+> | 概念 | 记号 | 一句话 | 来源 |
+> |---|---|---|---|
+> | **reward（奖励）** | $r_t$ | 环境每步给的**即时单步标量分** | MDP 五元组之一，环境直接输出 |
+> | return（回报） | $G_t=\sum_{k\ge0}\gamma^k r_{t+k+1}$ | 从 $t$ 起一路折扣累加的总分 | reward 的累积 |
+> | value（状态价值） | $V^\pi(s)=\mathbb{E}[G_t\mid s_t=s]$ | 状态 $s$ 下平均能拿多少（**状态底色**） | return 的期望 |
+> | Q（动作价值） | $Q^\pi(s,a)=\mathbb{E}[G_t\mid s,a]$ | 在 $s$ 做 $a$ 后平均能拿多少 | 条件期望 |
+> | **advantage（优势）** | $A^\pi(s,a)=Q^\pi(s,a)-V^\pi(s)$ | 在 $s$ 做 $a$ **比平均水平好/坏多少** | $Q$ 减 $V$ |
+> 
+> 链条：`reward` →（折扣累加）→ `return` →（取期望）→ `V / Q` →（相减）→ `advantage`。**reward 是最底层的环境信号原子**（单步、即时、不含任何长期信息）；**advantage 是最上层的"动作相对好坏"**（已扣掉状态底色、专门衡量"动作选择带来的增量"）。
+> 
+> ### 为什么 Actor-Critic / 策略梯度用 advantage 而不直接用 reward
+> 
+> - **直接用单步 $r_t$**：太近视，只看一步，丢掉长期信用（如下棋中间步 $r=0$ 但其实很关键）。
+> - **用 return $G_t$**（即 [[REINFORCE]]）：长期了，但 $G_t$ 混入了"状态本身好坏"的固定部分——优势棋面下不管选什么动作 $G$ 都大，这部分与动作选择无关、是噪声，导致**梯度方差爆炸**。
+> - **用 advantage $A=Q-V$**：$V^\pi(s)$ 正是"状态底色"（该状态平均能拿多少），减掉它只剩"动作选择带来的增量"。$A>0$ 表示该动作优于平均 → 应提高其概率；$A<0$ 劣于平均 → 应降低。这正是策略梯度需要的信号。
+> 
+> [[baseline]] 已证明：减一个与动作 $a$ 无关的量 $b(s_t)$ 不改变梯度期望但降方差，最优 $b=V^\pi(s_t)$。所以"用 advantage"在数学上等价于"用 return 减最优 baseline"，是**无偏的降方差操作**——这正是本条 §2 要讲的动机。
+> 
+> ### 在 Actor-Critic 里两者的分工（耦合点）
+> 
+> - **reward $r_t$**：环境信号，喂给 **critic** $V_\phi$ 做回归目标（$y_t=r_{t+1}+\gamma V_\phi(s_{t+1})$）。
+> - **advantage $\hat A_t$**：critic 算出 $V_\phi$ 后，用 $\hat A_t=G_t-V_\phi(s_t)$（或更稳的 GAE）当 **actor** 策略梯度的权重。
+> 
+> 即：`reward → critic（学底色 V）→ advantage（扣底色）→ actor（拿权重更新策略）`。advantage 是 actor 与 critic 的**耦合点**，也是本条 §3.2 的核心量。
+> 
+> ### 极简数值直觉
+> 
+> ```python
+> # 假设状态 s 下：选 a1 平均拿 5 分，选 a2 平均拿 8 分，策略各 50% 概率选
+> V = 0.5*5 + 0.5*8      # = 6.5   状态底色（平均能拿多少）
+> A_a1 = 5 - V           # = -1.5  劣于平均 → actor 降低 a1 概率
+> A_a2 = 8 - V           # = +1.5  优于平均 → actor 提高 a2 概率
+> # reward 只说"这步拿了多少"；advantage 说"这步比该状态的平均好/坏多少"——后者才是"该不该多选"的信号
+> ```
+> 
+> ### 常见误区
+> - ❌ **把 advantage 当 reward**：advantage 对策略动作的**期望为 0**（$\mathbb{E}_{a\sim\pi}[A^\pi(s,a)]=0$），不是环境给的原始分；它是个相对量。
+> - ❌ **以为优化 reward 就行**：RL 目标是**期望 return** $J=\mathbb{E}[G_0]$，不是单步 reward 之和；贪心单步 reward 常次优。
+> - ❌ **混淆 advantage 与 return**：return 是绝对量（含状态底色），advantage 是相对量（扣掉底色）；用错会让梯度有偏/方差大。
+> - ❌ **LLM-RL 把序列末尾 reward 平均分给每个 token 当 advantage**：太粗糙；reward 仅序列末尾一次，return 退化为单点，必须用 GAE 倒推 + critic 减 baseline，见 [[advantage estimation]] §8、[[GAE]]。
 
 ## 2. 为什么需要它（动机与背景）
 

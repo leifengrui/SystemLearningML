@@ -128,9 +128,6 @@ GPU 训练几乎总是 `nccl`——它针对 NV 拓扑（NVLink/PCIe/NVSwitch）
 
 默认 `op=` 同步阻塞直到完成；`async_op=True` 返回 `Work` 句柄，可与计算重叠——这是 [[overlap strategy]] 的基础。CPU 的 gloo 后端有些 op 不支持异步。
 
-### 3.5 与 `torchrun` 的关系
-
-`torchrun`（旧 `python -m torch.distributed.run`）负责**启动 N 个进程、注入 env vars、容错重启**。你只需写一个普通训练脚本，用 `torchrun --nproc_per_node=8 train.py` 启动，脚本里 `dist.init_process_group(backend="nccl", init_method="env://")` 即可。`torchrun` 是 `torch.distributed` 的标准启动器，取代了手写 `spawn`/`mpirun`。
 
 ### 3.6 销毁
 

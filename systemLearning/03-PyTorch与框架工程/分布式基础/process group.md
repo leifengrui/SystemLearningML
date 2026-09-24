@@ -6,7 +6,9 @@
 
 ## 1. 一句话定义
 
-**Process Group（进程组）** 是 `torch.distributed` 里对**一部分 rank 的逻辑编组**——一个 ProcessGroup 对象代表"这 N 个 rank 之间约定好可以互相做 collective 通信（all-reduce/all-gather/broadcast…）"的子集。默认有一个包含全部 rank 的 `WORLD` 组；`new_group(ranks=[...])` 可创建任意子组，使**不同并行维度各自在子组内通信**成为可能（3D 并行的根基）。
+**Process Group（进程组）** 是 `torch.distributed` 里对**一部分 rank 的逻辑编组**——一个 ProcessGroup 对象代表"这 N 个 rank 之间约定好可以互相做 collective 通信（all-reduce/all-gather/broadcast…）"的子集。
+默认只有一个包含全部 rank 的 `WORLD` 组；
+`new_group(ranks=[...])` 可创建任意子组，使**不同并行维度各自在子组内通信**成为可能（3D 并行的根基）。
 
 > [!note] 名字辨析
 > "Process Group" 在 PyTorch 语境有两层含义：(a) **逻辑子组**（`new_group` 返回的 `ProcessGroup` 对象，是一组 rank 的"频道"）；(b) **后端通信器**（每个 group 在 NCCL 里建一个 communicator，绑定一套通信拓扑）。二者一体两面：建一个 group = 在这些 rank 间建一个 NCCL communicator。

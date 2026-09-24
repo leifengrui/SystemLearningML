@@ -196,15 +196,6 @@ dist.destroy_process_group()
 
 ## 7. 常见误区与易错点
 
-> [!warning] 两个 UB，不要混淆
-> 华为语境有两个 **UB**：
-> 1. **UB (Unified Bus / 灵衢)** — 互联协议层面，NPU 间高速全栈互联（本文主题）
-> 2. **UB (Unified Buffer)** — AI Core（达芬奇架构）内部片上存储单元，是 Vector 核的私有缓存（类似寄存器文件/L1），CANN 文档"图融合和 **UB** 融合规则"指的是这个 Buffer 层面的算子融合
->
-> 两者完全不同。讨论通信链路时指前者；讨论算子融合/存储层级时指后者。
-
-> [!warning] UB ≠ HCCS
-> HCCS 是 Ascend 910/920 的片间互联（类似 NVLink），UB 是 950 起的统一全栈协议。HCCL 文档同时列出两者是因为支持不同代硬件。不要把 UB 当 HCCS 的别名。
 
 > [!warning] UB 单 lane 不等于 NVLink
 > UB 单 lane 118 Gbps 低于 NVLink 6 的 224 Gbps。UB 的优势在大规模 FullMesh（8192 卡）而非单 lane 带宽。在同等互联域规模下，UB 需要更多 lane 数来补偿——增加 pin 和线缆复杂度。

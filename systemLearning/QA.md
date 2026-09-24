@@ -264,6 +264,7 @@
 ### [[MDP]]
 
 - [[Actor-Critic]] — 什么是 [[Actor-Critic]]？（**新建型**：A-C=策略梯度两网络联合学习架构，actor 学 $\pi_\theta$、critic 学 $V_\phi$，critic 给 actor 低方差 advantage 权重 $\hat A_t$；把 REINFORCE 的"用实际 return 当权重、无偏高方差"升级为"用 critic 估 $V$ 减底色、有偏低方差、可在线"；是 A2C/A3C/PPO/RLHF-PPO 的统一骨架；含策略梯度定理→advantage 形式推导、双时间尺度收敛、GAE 标配、可跑代码、LLM-RL 映射表、与 REINFORCE/DQN/DDPG/SAC 对比、12 条误区）
+- [[Actor-Critic]] — 什么是 advantage 什么是 reward？（**行内型**：reward=环境每步即时标量分 $r_t$、advantage=$A=Q-V$ 衡量动作相对平均好坏；RL 价值链条 reward→return→V/Q→advantage；A-C 用 advantage 而非 reward/return 因减状态底色降方差（baseline 无偏降方差）；reward 喂 critic、advantage 喂 actor 作策略梯度权重；4 误区含"advantage 期望为 0 非原始分""优化 return 非 reward""混淆 advantage 与 return"）
 
 ## 四、强化学习基础 / Policy Gradient体系
 
