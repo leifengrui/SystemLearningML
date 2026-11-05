@@ -170,7 +170,7 @@ print("结论:推理升温治标,治本需训练层 entropy bonus/reward 分散"
 - **下游（应用）**: 推理采样策略、RLHF 后处理、用户体验工程。
 - **对比 / 易混**:
   - **mode collapse vs [[policy collapse]]**：见 §1 + [[policy collapse]] §3.3。现象 vs 机制。
-  - **mode collapse vs [[exposure bias]]**：前者是输出 mode 单一（训练后策略问题），后者是训练-推布分布偏移（自回归与 teacher forcing 差异）。不同。
+  - **mode collapse vs [[exposure bias]]**：前者是输出 mode 单一（训练后策略问题），后者是训练-推理分布偏移（自回归与 teacher forcing 差异）。不同。
   - **mode collapse vs [[reward hacking]]**：reward hacking 可引发 mode collapse（actor 塌缩到 RM 高分 mode），但前者是多样性层，后者是 proxy 层。
   - **训练层 vs 推理层防法**：前者治本（让 $\pi_\theta$ 多 mode），后者治标（从单一 $\pi_\theta$ 采多样）。
 

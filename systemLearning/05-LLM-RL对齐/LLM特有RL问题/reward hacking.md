@@ -181,7 +181,7 @@ print(f"加长度惩罚后 reward 不再单调鼓励拉长:{r_penalized[0]:.3f} 
 - **对比 / 易混**:
   - **reward hacking vs [[KL explosion]]**：前者是 proxy-true 差距（reward 涨但质量降），后者是 $\pi_\theta$ 漂离 ref（KL 爆、语言崩）。常并发但机制不同。
   - **reward hacking vs [[policy collapse]]/[[mode collapse]]**：前者是 reward 信号失真，后者是策略多样性丧失。reward hacking 可引发 mode collapse（actor 塌缩到 RM 高分 mode）。
-  - **reward hacking vs [[exposure bias]]**：前者是 proxy 优化偏差，后者是训练-推布分布偏移。不同问题。
+  - **reward hacking vs [[exposure bias]]**：前者是 proxy 优化偏差，后者是训练-推理分布偏移。不同问题。
   - **RM 集成 vs 在线 RM 更新**：前者静态多 RM 平均，后者动态补盲区。可结合。
   - **DPO 的 reward hacking**：DPO 无显式 RM，无 RM 漏洞，但可过拟合偏好数据偏差（"偏好 hacking"），机制不同。
 

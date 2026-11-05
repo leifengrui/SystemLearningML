@@ -16,3 +16,8 @@ venv/
 # 日志与临时
 *.log
 tmp/
+
+# 学习进度看板（本地工具，不入库）
+systemLearning/gen_progress.py
+systemLearning/进度.md
+systemLearning/进度看板.html

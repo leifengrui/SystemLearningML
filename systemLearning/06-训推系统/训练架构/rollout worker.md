@@ -264,7 +264,7 @@ print("weight sync:learner 更新后把新 θ 同步给此 worker")
   - **rollout worker vs [[inference worker]]**：见 §3.4 表。采数据 vs 服务用户。
   - **rollout worker vs learner**：前者采样（前向生成），后者训练（forward+backward+step）。
   - **rollout worker vs reward worker**：前者跑 actor 生成，后者（若有）跑 RM/ref 算 reward。可合并可分离。
-  - **rollout worker 的采样 vs 推布的采样**：前者按 $\pi_\theta$ 采样保探索（温度可调），后者按部署配置（温度/nucleus）。目的不同。
+  - **rollout worker 的采样 vs 推理的采样**：前者按 $\pi_\theta$ 采样保探索（温度可调），后者按部署配置（温度/nucleus）。目的不同。
 
 ## 7. 常见误区与易错点
 

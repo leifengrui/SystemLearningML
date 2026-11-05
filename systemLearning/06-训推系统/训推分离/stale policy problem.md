@@ -148,7 +148,7 @@ print("\n防法:weight sync 减小 k + ratio clip 限失真 + V-trace 修正")
 - **上游（依赖）**: [[asynchronous training]]（stale 的来源）、[[训推分离]]（PT-PD stale）、[[learner worker split]]、[[PPO clipped objective]]（ratio clip）、[[policy training (PT)]]/[[policy deployment (PD)]]。
 - **下游（应用）**: [[weight sync mechanism]]（防法核心）、V-trace/IMPALA、在线 RLHF 的 stale 管理、PD 版本管理。
 - **对比 / 易混**:
-  - **stale policy problem vs [[exposure bias]]**：前者是参数版本不一致（θ 滞后），后者是训练-推布分布偏移（前缀分布）。不同问题，可并发。
+  - **stale policy problem vs [[exposure bias]]**：前者是参数版本不一致（θ 滞后），后者是训练-推理分布偏移（前缀分布）。不同问题，可并发。
   - **stale policy problem vs [[KL explosion]]**：stale 引起 ratio 失真，可导致 KL drift，但不等同。stale 是成因，KL explosion 是后果之一。
   - **训练内部 stale vs PT-PD stale**：见 §3.1/§3.2。层次不同，防法略异。
   - **stale data vs stale policy**：前者指数据滞后（现象），后者指策略版本不一致导致的问题（后果）。前者引出后者。

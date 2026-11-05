@@ -161,7 +161,7 @@ speculative decoding 在 2024–2026 快速演进，主线趋势：**独立 draf
 
 | 方法 | 年份 | 核心创新 | 速度提升 | 状态 |
 |---|---|---|---|---|
-| **vanilla speculative** (Leviathan/Chen) | 2023 | 小 draft model 串行猜 + 大模型并行验 + 拒绝采样保证无损 | 2.0–2.8× | 经典基线，需独立 draft model |
+| **vanilla speculative** (Leviathan/Chen) | 2023 | 小 draft model 串行猜 + 大模型并行验 + 拒绝采样保证无损 | 2.0–2.8× | 经典基线，需独立 draft model；论文精读见 [[投机解码原论文精读]] |
 | **Medusa** (Cai et al.) | 2024 | 在 target 上接 **K 个并行预测头**，每头预测 +1/+2/.../+K 位置 token，一次 forward 出 K 候选；tree attention 验证 | 1.8–2.5× | 接受率 50–65%，**正被 EAGLE 取代**，但架构简单、HF/vLLM 原生支持 |
 | **EAGLE-1** (Li et al.) | 2024 | 关键洞察：draft 不预测离散 token，**预测 target 倒数第二层 hidden state（feature）**——feature 连续平滑远比 token 可预测；1 FC + 1 decoder layer 的轻量 head，复用 target 的 LM head 解码 draft token；保持无损 | 2.5–3× | 接受率 70–80%，显著高于 Medusa |
 | **EAGLE-2** | 2024 | 在 EAGLE-1 上加 **dynamic draft tree**：不再固定线性猜 K 个，按 target confidence 动态展开候选树，一次 forward 验证多分支 | 3.0–3.5× | 主流生产方法之一 |
@@ -506,7 +506,7 @@ speculative decoding 在 **RL post-training** 里的应用是 2026 年新热点�
    - **关键工程坑**：① actor weight sync 后必须**重载 draft model 权重**；② 重载后**重建 RoPE cos_sin cache**，否则 draft 跑飞；③ 加 rollout 侧 spec decode 指标（acceptance rate、mean acceptance length）便于训练时监控。
    - **已知问题**：policy drift 后 draft acceptance 会掉（step 100-120 可能 reward collapse），draft 需随训练更新而非静态。
 
-2. **verl-SpeCo**（verl 主仓 2026-06 pre-release）：**co-training framework for speculative decoding across RL training and inference**——在 RL 训练过程中**协同训练 draft model**，让 draft 在 policy 演化时保持对齐、训练后直接复用于加速 serving。核心解决"静态 draft 在 policy drift 后 acceptance 掉"的痛点。仓库 verl-project/verl-SpeCo。
+2. **verl-SpeCo**（verl 主仓 2026-06 pre-release）：**co-training framework for speculative decoding across RL training and inference**——在 RL 训练过程中**协同训练 draft model**，让 draft 在 policy 演化时保持对齐、训练后直接复用于加速 serving。核心解决"静态 draft 在 policy drift 后 acceptance 掉"的痛点。仓库 verl-project/verl-SpeCo。**完整展开见 [[verl-SpeCo]]**（三 hook Collect/Train/Publish、hidden states 两来源、各 drafter loss、publish 版本检查、benchmark）。
 
 3. **Decoupled Speculation**（arXiv:2511.16193，verl issue #5559 / PR #5757）：把 draft 和 verify **解耦到异步流水线**——drafter 不等上一轮 verify 结果就开始 draft 下一窗口，两阶段在独立 GPU 资源上重叠执行，消除 bubble。verl 社区正在为 SGLang rollout 实现 decoupled scheduler（drafter/verifier 分 Ray actor、共享 weight sync 路径、复用 SGLang 的 EagleDraftInput/EagleVerifyInput 数据结构）。
 
@@ -548,4 +548,4 @@ speculative decoding 在 RL 场景引入新的"训推不一致"风险：
 - [vLLM speculators eagle3 docs](https://github.com/vllm-project/speculators/blob/main/docs/user_guide/algorithms/eagle3.md)
 
 ---
-相关: [[高级推理技术]] | [[KV cache management]] | [[beam search]] | [[parallel decoding]] | [[sampling throughput]] | [[weight sync mechanism]] | [[训推不一致]] | [[stale policy problem]]
+相关: [[高级推理技术]] | [[投机解码原论文精读]] | [[KV cache management]] | [[beam search]] | [[parallel decoding]] | [[sampling throughput]] | [[weight sync mechanism]] | [[训推不一致]] | [[stale policy problem]] | [[verl-SpeCo]]

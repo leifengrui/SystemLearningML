@@ -178,7 +178,7 @@ print(f"adaptive β: {beta} -> {beta_adapt} (KL 爆时自动增大)")
 - **对比 / 易混**:
   - **KL explosion vs [[reward hacking]]**：见 §3.4 表。漂移 vs proxy 差距，常并发。
   - **KL explosion vs [[policy collapse]]/[[mode collapse]]**：KL explosion 是漂离 ref（语言崩），collapse 是策略塌缩（多样性丧失）。KL explosion 可引发 collapse（漂移后塌缩到某 mode）。
-  - **KL explosion vs [[exposure bias]]**：前者是训练中漂移，后者是训练-推布分布偏移。不同。
+  - **KL explosion vs [[exposure bias]]**：前者是训练中漂移，后者是训练-推理分布偏移。不同。
   - **adaptive β vs fixed β**：adaptive 在 KL 爆时自调，fixed 需手调。adaptive 是防 KL explosion 的主手段。
 
 ## 7. 常见误区与易错点
